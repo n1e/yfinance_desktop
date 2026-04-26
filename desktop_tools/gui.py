@@ -294,9 +294,13 @@ class ValuationTab(QWidget):
         if not results:
             return
 
+        def get_total_score(r):
+            metrics = r.get('metrics', {})
+            return metrics.get('scores', {}).get('total', 0) if isinstance(metrics, dict) else 0
+
         sorted_results = sorted(
             results,
-            key=lambda x: x.get('metrics', {}).get('total_score', 0) if x.get('metrics') else 0,
+            key=get_total_score,
             reverse=True
         )
 
@@ -305,11 +309,11 @@ class ValuationTab(QWidget):
 
         summary_text = "批量分析完成，按综合评分排序:\n\n"
         for i, result in enumerate(sorted_results[:10]):
-            metrics = result.get('metrics')
-            if metrics:
-                symbol = result['symbol']
-                score = metrics.total_score if hasattr(metrics, 'total_score') else 0
-                status = metrics.valuation_status if hasattr(metrics, 'valuation_status') else '-'
+            metrics = result.get('metrics', {})
+            if isinstance(metrics, dict):
+                symbol = result.get('symbol', 'Unknown')
+                score = metrics.get('scores', {}).get('total', 0)
+                status = metrics.get('valuation_summary', {}).get('status', '-')
                 summary_text += f"{i+1}. {symbol}: {int(score)}分 - {status}\n"
 
         if len(sorted_results) > 10:
@@ -319,18 +323,18 @@ class ValuationTab(QWidget):
 
     def _display_info_table(self, result: Dict[str, Any]):
         metrics = result.get('metrics')
-        if not metrics:
+        if not metrics or not isinstance(metrics, dict):
             return
 
         self._info_table.setRowCount(0)
         
         info_items = [
-            ("股票代码", result.get('symbol', '')),
-            ("公司名称", metrics.name if hasattr(metrics, 'name') else ''),
-            ("当前价格", f"${metrics.current_price:.2f}" if hasattr(metrics, 'current_price') and metrics.current_price else '-'),
-            ("所属行业", metrics.industry if hasattr(metrics, 'industry') else ''),
-            ("所属板块", metrics.sector if hasattr(metrics, 'sector') else ''),
-            ("市值", self._format_market_cap(metrics.market_cap) if hasattr(metrics, 'market_cap') and metrics.market_cap else '-'),
+            ("股票代码", result.get('symbol', metrics.get('symbol', ''))),
+            ("公司名称", metrics.get('name', '')),
+            ("当前价格", f"${metrics['current_price']:.2f}" if metrics.get('current_price') else '-'),
+            ("所属行业", metrics.get('industry', '')),
+            ("所属板块", metrics.get('sector', '')),
+            ("市值", self._format_market_cap(metrics.get('market_cap')) if metrics.get('market_cap') else '-'),
         ]
 
         self._info_table.setRowCount(len(info_items))
@@ -340,20 +344,26 @@ class ValuationTab(QWidget):
 
     def _display_metrics_table(self, result: Dict[str, Any]):
         metrics = result.get('metrics')
-        if not metrics:
+        if not metrics or not isinstance(metrics, dict):
             return
 
         self._metrics_table.setRowCount(0)
         
+        val_metrics = metrics.get('valuation_metrics', {})
+        fin_health = metrics.get('financial_health', {})
+        
         metric_items = [
-            ("滚动市盈率 (PE TTM)", metrics.pe_trailing, metrics.industry_avg_pe),
-            ("预期市盈率 (PE Forward)", metrics.pe_forward, None),
-            ("市净率 (PB)", metrics.pb_ratio, metrics.industry_avg_pb),
-            ("市盈增长比 (PEG)", metrics.peg_ratio, None),
-            ("市销率 (PS)", metrics.price_to_sales, metrics.industry_avg_ps),
-            ("企业价值倍数 (EV/EBITDA)", metrics.ev_to_ebitda, None),
-            ("股息率", metrics.dividend_yield, None),
-            ("每股自由现金流", metrics.fcf_per_share, None),
+            ("滚动市盈率 (PE TTM)", val_metrics.get('pe_trailing'), None),
+            ("预期市盈率 (PE Forward)", val_metrics.get('pe_forward'), None),
+            ("市净率 (PB)", val_metrics.get('pb_ratio'), None),
+            ("市盈增长比 (PEG)", val_metrics.get('peg_ratio'), None),
+            ("市销率 (PS)", val_metrics.get('price_to_sales'), None),
+            ("企业价值倍数 (EV/EBITDA)", val_metrics.get('ev_to_ebitda'), None),
+            ("股息率", val_metrics.get('dividend_yield'), None),
+            ("每股自由现金流", val_metrics.get('fcf_per_share'), None),
+            ("预期5年增长率", fin_health.get('growth_rate_5y'), None),
+            ("ROE", fin_health.get('roe'), None),
+            ("ROA", fin_health.get('roa'), None),
         ]
 
         self._metrics_table.setRowCount(len(metric_items))
@@ -361,6 +371,8 @@ class ValuationTab(QWidget):
             self._metrics_table.setItem(i, 0, QTableWidgetItem(label))
             
             value_str = f"{value:.2f}" if value is not None else '-'
+            if '股息率' in label and value is not None:
+                value_str = f"{value*100:.2f}%"
             value_item = QTableWidgetItem(value_str)
             self._metrics_table.setItem(i, 1, value_item)
             
@@ -427,34 +439,43 @@ class ValuationTab(QWidget):
 
     def _display_dcf_table(self, result: Dict[str, Any]):
         metrics = result.get('metrics')
-        if not metrics:
+        if not metrics or not isinstance(metrics, dict):
             return
 
         self._dcf_table.setRowCount(0)
         
         dcf_items = []
         
-        if hasattr(metrics, 'current_price') and metrics.current_price:
-            dcf_items.append(("当前价格", f"${metrics.current_price:.2f}"))
+        current_price = metrics.get('current_price')
+        if current_price:
+            dcf_items.append(("当前价格", f"${current_price:.2f}"))
         
-        if hasattr(metrics, 'dcf_intrinsic_value') and metrics.dcf_intrinsic_value:
-            dcf_items.append(("DCF内在价值", f"${metrics.dcf_intrinsic_value:.2f}"))
+        dcf_analysis = metrics.get('dcf_analysis', {})
+        intrinsic_value = dcf_analysis.get('intrinsic_value')
+        if intrinsic_value:
+            dcf_items.append(("DCF内在价值", f"${intrinsic_value:.2f}"))
         
-        if hasattr(metrics, 'safe_price') and metrics.safe_price:
-            dcf_items.append(("安全价格 (25%安全边际)", f"${metrics.safe_price:.2f}"))
+        safe_price = dcf_analysis.get('safe_price')
+        if safe_price:
+            dcf_items.append(("安全价格 (25%安全边际)", f"${safe_price:.2f}"))
         
-        if hasattr(metrics, 'margin_of_safety') and metrics.margin_of_safety is not None:
-            dcf_items.append(("安全边际", f"{metrics.margin_of_safety:.1f}%"))
+        margin_of_safety = dcf_analysis.get('margin_of_safety')
+        if margin_of_safety is not None:
+            dcf_items.append(("安全边际", f"{margin_of_safety:.1f}%"))
         
-        if hasattr(metrics, 'reasonable_price_low') and metrics.reasonable_price_low:
-            if hasattr(metrics, 'reasonable_price_high') and metrics.reasonable_price_high:
-                dcf_items.append((
-                    "合理价格区间", 
-                    f"${metrics.reasonable_price_low:.2f} - ${metrics.reasonable_price_high:.2f}"
-                ))
+        val_summary = metrics.get('valuation_summary', {})
+        price_low = val_summary.get('reasonable_price_low')
+        price_high = val_summary.get('reasonable_price_high')
+        if price_low and price_high:
+            dcf_items.append((
+                "合理价格区间", 
+                f"${price_low:.2f} - ${price_high:.2f}"
+            ))
 
-        if hasattr(metrics, 'growth_rate_5y') and metrics.growth_rate_5y:
-            dcf_items.append(("预期5年增长率", f"{metrics.growth_rate_5y:.1%}"))
+        fin_health = metrics.get('financial_health', {})
+        growth_rate = fin_health.get('growth_rate_5y')
+        if growth_rate:
+            dcf_items.append(("预期5年增长率", f"{growth_rate:.1%}"))
 
         self._dcf_table.setRowCount(len(dcf_items))
         for i, (label, value) in enumerate(dcf_items):
@@ -485,18 +506,23 @@ class ValuationTab(QWidget):
         total_score = 0
         status = ''
         
-        if metrics:
-            if hasattr(metrics, 'total_score'):
-                total_score = metrics.total_score
-            if hasattr(metrics, 'valuation_status'):
-                status = metrics.valuation_status
+        if isinstance(metrics, dict):
+            scores_dict = metrics.get('scores', {})
+            total_score = scores_dict.get('total', 0)
             
-            if hasattr(metrics, 'price_reasonableness_score'):
-                self._dimensions['价格合理性'].set_score(metrics.price_reasonableness_score)
-            if hasattr(metrics, 'growth_score'):
-                self._dimensions['成长性'].set_score(metrics.growth_score)
-            if hasattr(metrics, 'safety_score'):
-                self._dimensions['安全性'].set_score(metrics.safety_score)
+            val_summary = metrics.get('valuation_summary', {})
+            status = val_summary.get('status', '')
+            
+            price_score = scores_dict.get('price_reasonableness', {}).get('total', 0)
+            growth_score = scores_dict.get('growth', {}).get('total', 0)
+            safety_score = scores_dict.get('safety', {}).get('total', 0)
+            
+            if price_score > 0:
+                self._dimensions['价格合理性'].set_score(price_score)
+            if growth_score > 0:
+                self._dimensions['成长性'].set_score(growth_score)
+            if safety_score > 0:
+                self._dimensions['安全性'].set_score(safety_score)
 
         if total_score > 0:
             self._total_score_display.set_score(total_score, status)
@@ -506,33 +532,44 @@ class ValuationTab(QWidget):
 
     def _display_summary(self, result: Dict[str, Any]):
         metrics = result.get('metrics')
-        if not metrics:
+        if not metrics or not isinstance(metrics, dict):
             return
 
         summary = ""
 
-        if hasattr(metrics, 'valuation_status') and metrics.valuation_status:
-            summary += f"估值状态: {metrics.valuation_status}\n\n"
+        val_summary = metrics.get('valuation_summary', {})
+        status = val_summary.get('status', '')
+        if status:
+            summary += f"估值状态: {status}\n\n"
 
-        if hasattr(metrics, 'total_score'):
-            summary += f"综合评分: {int(metrics.total_score)}分\n"
+        scores_dict = metrics.get('scores', {})
+        total_score = scores_dict.get('total', 0)
+        if total_score > 0:
+            summary += f"综合评分: {int(total_score)}分\n"
             
-            if hasattr(metrics, 'price_reasonableness_score'):
-                summary += f"  - 价格合理性: {int(metrics.price_reasonableness_score)}分 (40%)\n"
-            if hasattr(metrics, 'growth_score'):
-                summary += f"  - 成长性: {int(metrics.growth_score)}分 (35%)\n"
-            if hasattr(metrics, 'safety_score'):
-                summary += f"  - 安全性: {int(metrics.safety_score)}分 (25%)\n"
+            price_score = scores_dict.get('price_reasonableness', {}).get('total', 0)
+            growth_score = scores_dict.get('growth', {}).get('total', 0)
+            safety_score = scores_dict.get('safety', {}).get('total', 0)
+            
+            if price_score > 0:
+                summary += f"  - 价格合理性: {int(price_score)}分 (40%)\n"
+            if growth_score > 0:
+                summary += f"  - 成长性: {int(growth_score)}分 (35%)\n"
+            if safety_score > 0:
+                summary += f"  - 安全性: {int(safety_score)}分 (25%)\n"
 
-        if hasattr(metrics, 'reasonable_price_low') and metrics.reasonable_price_low:
-            if hasattr(metrics, 'reasonable_price_high') and metrics.reasonable_price_high:
-                summary += f"\n合理价格区间: ${metrics.reasonable_price_low:.2f} - ${metrics.reasonable_price_high:.2f}\n"
+        price_low = val_summary.get('reasonable_price_low')
+        price_high = val_summary.get('reasonable_price_high')
+        if price_low and price_high:
+            summary += f"\n合理价格区间: ${price_low:.2f} - ${price_high:.2f}\n"
 
-        if hasattr(metrics, 'margin_of_safety') and metrics.margin_of_safety is not None:
-            summary += f"安全边际: {metrics.margin_of_safety:.1f}%"
-            if metrics.margin_of_safety > 25:
+        dcf_analysis = metrics.get('dcf_analysis', {})
+        margin_of_safety = dcf_analysis.get('margin_of_safety')
+        if margin_of_safety is not None:
+            summary += f"安全边际: {margin_of_safety:.1f}%"
+            if margin_of_safety > 25:
                 summary += " (具有较高安全边际)"
-            elif metrics.margin_of_safety > 0:
+            elif margin_of_safety > 0:
                 summary += " (有一定安全边际)"
             else:
                 summary += " (安全边际不足)"
@@ -605,42 +642,69 @@ class ValuationAnalysisThread(QThread):
         except Exception as e:
             self.error_signal.emit(str(e))
 
-    def _extract_scores(self, metrics) -> Dict[str, float]:
+    def _extract_scores(self, analysis_result: Dict[str, Any]) -> Dict[str, float]:
         scores = {}
         
-        if hasattr(metrics, 'total_score'):
-            total = metrics.total_score
+        if not analysis_result:
+            return scores
+        
+        total_score = analysis_result.get('scores', {}).get('total', 0)
+        
+        if total_score > 0:
+            price_score = analysis_result.get('scores', {}).get('price_reasonableness', {}).get('total', total_score * 0.4)
+            growth_score = analysis_result.get('scores', {}).get('growth', {}).get('total', total_score * 0.35)
+            safety_score = analysis_result.get('scores', {}).get('safety', {}).get('total', total_score * 0.25)
             
-            if hasattr(metrics, 'price_reasonableness_score'):
-                scores['pe_score'] = metrics.price_reasonableness_score * 0.5
-                scores['pb_score'] = metrics.price_reasonableness_score * 0.3
-                scores['margin_score'] = metrics.price_reasonableness_score * 0.5
-            else:
-                scores['pe_score'] = total * 0.3
-                scores['pb_score'] = total * 0.3
-                scores['margin_score'] = total * 0.4
+            radar_data = analysis_result.get('radar_data', {})
+            radar_values = radar_data.get('values', [])
+            radar_labels = radar_data.get('labels', [])
             
-            if hasattr(metrics, 'growth_score'):
-                scores['growth_score'] = metrics.growth_score * 0.7
-                scores['profit_score'] = metrics.growth_score * 0.5
-                scores['fcf_score'] = metrics.growth_score * 0.4
-            else:
-                scores['growth_score'] = total * 0.6
-                scores['profit_score'] = total * 0.5
-                scores['fcf_score'] = total * 0.4
+            for i, label in enumerate(radar_labels):
+                if i < len(radar_values):
+                    if 'PE' in label:
+                        scores['pe_score'] = radar_values[i]
+                    elif 'PB' in label:
+                        scores['pb_score'] = radar_values[i]
+                    elif 'PEG' in label:
+                        scores['peg_score'] = radar_values[i]
+                    elif 'PS' in label:
+                        scores['ps_score'] = radar_values[i]
+                    elif 'EV/EBITDA' in label:
+                        scores['ev_ebitda_score'] = radar_values[i]
+                    elif '股息' in label:
+                        scores['dividend_score'] = radar_values[i]
+                    elif '增长' in label:
+                        scores['growth_score'] = radar_values[i]
+                    elif '盈利' in label:
+                        scores['profit_score'] = radar_values[i]
+                    elif '财务' in label:
+                        scores['financial_health_score'] = radar_values[i]
+                    elif '安全' in label:
+                        scores['margin_score'] = radar_values[i]
             
-            if hasattr(metrics, 'safety_score'):
-                scores['dividend_score'] = metrics.safety_score * 0.5
-                scores['financial_health_score'] = metrics.safety_score * 0.6
-            else:
-                scores['dividend_score'] = total * 0.4
-                scores['financial_health_score'] = total * 0.5
-            
-            scores['peg_score'] = total * 0.5
-            scores['quality_score'] = total * 0.6
+            if 'pe_score' not in scores:
+                scores['pe_score'] = price_score
+            if 'pb_score' not in scores:
+                scores['pb_score'] = price_score * 0.8
+            if 'margin_score' not in scores:
+                scores['margin_score'] = price_score
+            if 'peg_score' not in scores:
+                scores['peg_score'] = price_score * 0.7
+            if 'growth_score' not in scores:
+                scores['growth_score'] = growth_score
+            if 'profit_score' not in scores:
+                scores['profit_score'] = growth_score
+            if 'fcf_score' not in scores:
+                scores['fcf_score'] = growth_score * 0.8
+            if 'dividend_score' not in scores:
+                scores['dividend_score'] = safety_score
+            if 'financial_health_score' not in scores:
+                scores['financial_health_score'] = safety_score
+            if 'quality_score' not in scores:
+                scores['quality_score'] = total_score
             
             for key in scores:
-                scores[key] = min(100.0, max(0.0, scores[key]))
+                scores[key] = min(100.0, max(0.0, float(scores[key])))
         
         return scores
 
