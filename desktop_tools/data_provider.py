@@ -469,3 +469,139 @@ class DataProvider:
         except Exception as e:
             print(f"获取股票 {symbol} 两年财务数据失败: {e}")
             return None
+
+    def get_valuation_metrics(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        获取股票的估值指标数据
+        返回: 包含 PE、PB、PEG、市销率、EV/EBITDA、股息率等的字典
+        """
+        try:
+            ticker = self._get_ticker(symbol)
+            info = ticker.info
+
+            if not info:
+                return None
+
+            def safe_get(data, key, default=None):
+                value = data.get(key)
+                if value is None or (isinstance(value, float) and (value != value or value == float('inf'))):
+                    return default
+                return value
+
+            metrics = {
+                'symbol': symbol.upper(),
+                'name': safe_get(info, 'longName', safe_get(info, 'shortName', symbol)),
+                'current_price': safe_get(info, 'currentPrice', safe_get(info, 'regularMarketPrice')),
+                'market_cap': safe_get(info, 'marketCap'),
+                'sector': safe_get(info, 'sector', ''),
+                'industry': safe_get(info, 'industry', ''),
+                'pe_trailing': safe_get(info, 'trailingPE'),
+                'pe_forward': safe_get(info, 'forwardPE'),
+                'pb_ratio': safe_get(info, 'priceToBook'),
+                'peg_ratio': safe_get(info, 'pegRatio'),
+                'price_to_sales': safe_get(info, 'priceToSalesTrailing12Months'),
+                'ev_to_ebitda': safe_get(info, 'enterpriseToEbitda'),
+                'dividend_yield': safe_get(info, 'dividendYield'),
+                'shares_outstanding': safe_get(info, 'sharesOutstanding'),
+                'debt_to_equity': safe_get(info, 'debtToEquity'),
+                'current_ratio': safe_get(info, 'currentRatio'),
+                'roe': safe_get(info, 'returnOnEquity'),
+                'roa': safe_get(info, 'returnOnAssets'),
+                'growth_rate_5y': safe_get(info, 'fiveYearAvgDividendYield'),
+            }
+
+            if metrics['dividend_yield'] is not None:
+                metrics['dividend_yield'] = metrics['dividend_yield'] * 100
+
+            if metrics['roe'] is not None:
+                metrics['roe'] = metrics['roe'] * 100
+
+            if metrics['roa'] is not None:
+                metrics['roa'] = metrics['roa'] * 100
+
+            try:
+                balance_sheet = ticker.balance_sheet
+                if balance_sheet is not None and not balance_sheet.empty:
+                    latest_col = balance_sheet.columns[0]
+                    metrics['cash_and_equivalents'] = self._get_value_from_df(balance_sheet, 'Cash And Cash Equivalents', latest_col)
+                    if metrics['cash_and_equivalents'] is None:
+                        metrics['cash_and_equivalents'] = self._get_value_from_df(
+                            balance_sheet, 'Cash Cash Equivalents And Short Term Investments', latest_col
+                        )
+                    metrics['total_debt'] = self._get_value_from_df(balance_sheet, 'Total Debt', latest_col)
+            except Exception as e:
+                print(f"获取 {symbol} 资产负债表数据失败: {e}")
+
+            try:
+                cashflow = ticker.cashflow
+                if cashflow is not None and not cashflow.empty:
+                    latest_col = cashflow.columns[0]
+                    metrics['operating_cash_flow'] = self._get_value_from_df(cashflow, 'Operating Cash Flow', latest_col)
+                    metrics['capital_expenditures'] = self._get_value_from_df(cashflow, 'Capital Expenditure', latest_col)
+
+                    if metrics['operating_cash_flow'] is not None and metrics['capital_expenditures'] is not None:
+                        metrics['free_cash_flow'] = metrics['operating_cash_flow'] + metrics['capital_expenditures']
+
+                        if metrics['shares_outstanding'] and metrics['shares_outstanding'] > 0:
+                            metrics['fcf_per_share'] = metrics['free_cash_flow'] / metrics['shares_outstanding']
+            except Exception as e:
+                print(f"获取 {symbol} 现金流量表数据失败: {e}")
+
+            try:
+                financials = ticker.financials
+                if financials is not None and not financials.empty:
+                    latest_col = financials.columns[0]
+                    metrics['net_income'] = self._get_value_from_df(financials, 'Net Income', latest_col)
+            except Exception as e:
+                print(f"获取 {symbol} 利润表数据失败: {e}")
+
+            self._update_cache_time(symbol)
+            return metrics
+
+        except Exception as e:
+            print(f"获取股票 {symbol} 估值数据失败: {e}")
+            return None
+
+    def _get_value_from_df(self, df, key: str, col) -> Optional[float]:
+        """从 DataFrame 中安全获取值"""
+        try:
+            import pandas as pd
+            if key in df.index:
+                val = df.loc[key, col]
+                if pd.isna(val):
+                    return None
+                return float(val)
+            return None
+        except Exception:
+            return None
+
+    def get_growth_estimates(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        获取股票的增长预测数据
+        """
+        try:
+            ticker = self._get_ticker(symbol)
+            growth_estimates = ticker.growth_estimates
+
+            if growth_estimates is None or growth_estimates.empty:
+                return None
+
+            result = {
+                'symbol': symbol.upper(),
+                'estimates': {}
+            }
+
+            for period in growth_estimates.index:
+                row = growth_estimates.loc[period]
+                result['estimates'][period] = {
+                    'stock': row.get('stock'),
+                    'industry': row.get('industry'),
+                    'sector': row.get('sector'),
+                    'index': row.get('index'),
+                }
+
+            return result
+
+        except Exception as e:
+            print(f"获取股票 {symbol} 增长预测数据失败: {e}")
+            return None

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.gurufocus.com)",
+      "WebFetch(domain:finbox.com)",
+      "WebFetch(domain:stockanalysis.com)",
+      "WebFetch(domain:www.wisesheets.io)",
+      "WebFetch(domain:www.macrotrends.net)",
+      "Bash(gh search *)",
+      "Bash(python *)"
+    ]
+  }
+}

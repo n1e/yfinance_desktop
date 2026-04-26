@@ -17,6 +17,8 @@ from .watchlist import WatchlistManager
 from .data_provider import DataProvider
 from .news_manager import NewsManager
 from .screener import StockScreener
+from .valuation_analyzer import ValuationAnalyzer
+from .radar_chart import RadarChartWidget, DimensionScoreBar, TotalScoreDisplay
 
 
 class WatchlistTab(QWidget):
@@ -1266,6 +1268,441 @@ class SettingsTab(QWidget):
         self._load_settings()
 
 
+class ValuationTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._config = ConfigManager()
+        self._watchlist_manager = WatchlistManager()
+        self._valuation_analyzer = ValuationAnalyzer()
+        self._current_analysis: Optional[Dict[str, Any]] = None
+        self._init_ui()
+        self._init_connections()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        control_group = QGroupBox("选择股票")
+        control_layout = QHBoxLayout(control_group)
+
+        control_layout.addWidget(QLabel("股票代码:"))
+        self._symbol_combo = QComboBox()
+        self._symbol_combo.setEditable(True)
+        self._symbol_combo.setMaximumWidth(150)
+        control_layout.addWidget(self._symbol_combo)
+
+        self._analyze_btn = QPushButton("开始分析")
+        self._analyze_btn.setMinimumHeight(35)
+        control_layout.addWidget(self._analyze_btn)
+
+        self._analyze_all_btn = QPushButton("分析所有自选股")
+        self._analyze_all_btn.setMinimumHeight(35)
+        control_layout.addWidget(self._analyze_all_btn)
+
+        control_layout.addStretch()
+
+        layout.addWidget(control_group)
+
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setVisible(False)
+        layout.addWidget(self._progress_bar)
+
+        main_splitter = QSplitter(Qt.Horizontal)
+
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
+
+        self._stock_info_group = QGroupBox("股票基本信息")
+        stock_info_layout = QVBoxLayout(self._stock_info_group)
+        
+        self._stock_info_label = QLabel("请选择股票并点击\"开始分析\"")
+        self._stock_info_label.setWordWrap(True)
+        stock_info_layout.addWidget(self._stock_info_label)
+
+        left_layout.addWidget(self._stock_info_group)
+
+        self._valuation_metrics_group = QGroupBox("估值指标")
+        valuation_layout = QVBoxLayout(self._valuation_metrics_group)
+        
+        self._valuation_table = QTableWidget()
+        self._valuation_table.setColumnCount(2)
+        self._valuation_table.setHorizontalHeaderLabels(["指标", "数值"])
+        self._valuation_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._valuation_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._valuation_table.setAlternatingRowColors(True)
+        self._valuation_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        valuation_layout.addWidget(self._valuation_table)
+
+        left_layout.addWidget(self._valuation_metrics_group)
+
+        self._dcf_group = QGroupBox("DCF估值分析")
+        dcf_layout = QVBoxLayout(self._dcf_group)
+        
+        self._dcf_label = QLabel("DCF分析结果将显示在这里")
+        self._dcf_label.setWordWrap(True)
+        dcf_layout.addWidget(self._dcf_label)
+
+        left_layout.addWidget(self._dcf_group)
+
+        main_splitter.addWidget(left_widget)
+
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+
+        radar_group = QGroupBox("估值雷达图")
+        radar_layout = QVBoxLayout(radar_group)
+        
+        self._radar_chart = RadarChartWidget()
+        self._radar_chart.setMinimumSize(400, 400)
+        radar_layout.addWidget(self._radar_chart)
+
+        right_layout.addWidget(radar_group)
+
+        scores_group = QGroupBox("综合评分")
+        scores_layout = QVBoxLayout(scores_group)
+
+        scores_top_layout = QHBoxLayout()
+        
+        self._total_score_display = TotalScoreDisplay()
+        self._total_score_display.setMinimumSize(180, 180)
+        scores_top_layout.addWidget(self._total_score_display)
+        scores_top_layout.addStretch()
+
+        scores_layout.addLayout(scores_top_layout)
+
+        self._price_score_bar = DimensionScoreBar()
+        self._growth_score_bar = DimensionScoreBar()
+        self._safety_score_bar = DimensionScoreBar()
+
+        scores_layout.addWidget(self._price_score_bar)
+        scores_layout.addWidget(self._growth_score_bar)
+        scores_layout.addWidget(self._safety_score_bar)
+
+        self._summary_group = QGroupBox("估值总结")
+        summary_layout = QVBoxLayout(self._summary_group)
+        
+        self._summary_label = QLabel("估值总结将显示在这里")
+        self._summary_label.setWordWrap(True)
+        summary_layout.addWidget(self._summary_label)
+
+        scores_layout.addWidget(self._summary_group)
+
+        right_layout.addWidget(scores_group)
+
+        main_splitter.addWidget(right_widget)
+
+        main_splitter.setSizes([400, 500])
+
+        layout.addWidget(main_splitter)
+
+        self._update_symbol_combo()
+
+    def _init_connections(self):
+        self._analyze_btn.clicked.connect(self._analyze_stock)
+        self._analyze_all_btn.clicked.connect(self._analyze_all_watchlist)
+        self._watchlist_manager.add_update_callback(self._update_symbol_combo)
+
+    def _update_symbol_combo(self):
+        current_text = self._symbol_combo.currentText()
+        self._symbol_combo.clear()
+        self._symbol_combo.addItems(self._watchlist_manager.watchlist)
+        if current_text:
+            index = self._symbol_combo.findText(current_text)
+            if index >= 0:
+                self._symbol_combo.setCurrentIndex(index)
+
+    def _format_number(self, num: Optional[float], decimals: int = 2) -> str:
+        if num is None:
+            return "--"
+        if num >= 1_000_000_000_000:
+            return f"{num/1_000_000_000_000:.{decimals}f}T"
+        elif num >= 1_000_000_000:
+            return f"{num/1_000_000_000:.{decimals}f}B"
+        elif num >= 1_000_000:
+            return f"{num/1_000_000:.{decimals}f}M"
+        elif num >= 1_000:
+            return f"{num/1_000:.{decimals}f}K"
+        return f"{num:.{decimals}f}"
+
+    def _analyze_stock(self):
+        symbol = self._symbol_combo.currentText().strip().upper()
+        if not symbol:
+            QMessageBox.warning(self, "提示", "请输入或选择股票代码")
+            return
+
+        self._analyze_btn.setEnabled(False)
+        self._analyze_all_btn.setEnabled(False)
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setRange(0, 0)
+
+        class AnalysisThread(QThread):
+            finished_signal = pyqtSignal(dict)
+            error_signal = pyqtSignal(str)
+
+            def __init__(self, analyzer, symbol):
+                super().__init__()
+                self._analyzer = analyzer
+                self._symbol = symbol
+
+            def run(self):
+                try:
+                    result = self._analyzer.analyze_stock(self._symbol)
+                    if result:
+                        self.finished_signal.emit(result)
+                    else:
+                        self.error_signal.emit(f"无法获取股票 {self._symbol} 的估值数据")
+                except Exception as e:
+                    self.error_signal.emit(str(e))
+
+        self._analysis_thread = AnalysisThread(self._valuation_analyzer, symbol)
+        self._analysis_thread.finished_signal.connect(self._on_analysis_finished)
+        self._analysis_thread.error_signal.connect(self._on_analysis_error)
+        self._analysis_thread.start()
+
+    def _analyze_all_watchlist(self):
+        watchlist = self._watchlist_manager.watchlist
+        if not watchlist:
+            QMessageBox.warning(self, "提示", "自选股列表为空，请先添加股票")
+            return
+
+        self._analyze_btn.setEnabled(False)
+        self._analyze_all_btn.setEnabled(False)
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setRange(0, len(watchlist))
+        self._progress_bar.setValue(0)
+
+        class BatchAnalysisThread(QThread):
+            progress_signal = pyqtSignal(int, int, str)
+            finished_signal = pyqtSignal(list)
+            error_signal = pyqtSignal(str)
+
+            def __init__(self, analyzer, symbols):
+                super().__init__()
+                self._analyzer = analyzer
+                self._symbols = symbols
+
+            def run(self):
+                try:
+                    def progress_callback(current, total, symbol):
+                        self.progress_signal.emit(current, total, symbol)
+
+                    results = self._analyzer.analyze_multiple(self._symbols, progress_callback)
+                    self.finished_signal.emit(results)
+                except Exception as e:
+                    self.error_signal.emit(str(e))
+
+        self._batch_thread = BatchAnalysisThread(self._valuation_analyzer, watchlist)
+        self._batch_thread.progress_signal.connect(self._on_batch_progress)
+        self._batch_thread.finished_signal.connect(self._on_batch_finished)
+        self._batch_thread.error_signal.connect(self._on_analysis_error)
+        self._batch_thread.start()
+
+    def _on_batch_progress(self, current: int, total: int, symbol: str):
+        self._progress_bar.setValue(current)
+        self._progress_bar.setFormat(f"正在分析 {symbol} ({current}/{total})")
+
+    def _on_batch_finished(self, results: List[Dict[str, Any]]):
+        self._progress_bar.setVisible(False)
+        self._analyze_btn.setEnabled(True)
+        self._analyze_all_btn.setEnabled(True)
+
+        if not results:
+            QMessageBox.information(self, "结果", "没有成功分析任何股票")
+            return
+
+        best_stock = max(results, key=lambda x: x['scores']['total'])
+        
+        self._display_analysis_results(best_stock)
+
+        if len(results) > 1:
+            QMessageBox.information(
+                self, "分析完成",
+                f"已分析 {len(results)} 只股票\n"
+                f"评分最高: {best_stock['symbol']} ({best_stock['scores']['total']:.1f}分)\n"
+                f"估值状态: {best_stock['valuation_summary']['status']}"
+            )
+
+    def _on_analysis_finished(self, result: Dict[str, Any]):
+        self._progress_bar.setVisible(False)
+        self._analyze_btn.setEnabled(True)
+        self._analyze_all_btn.setEnabled(True)
+
+        self._display_analysis_results(result)
+
+    def _display_analysis_results(self, result: Dict[str, Any]):
+        self._current_analysis = result
+
+        symbol = result.get('symbol', '')
+        name = result.get('name', '')
+        current_price = result.get('current_price')
+        market_cap = result.get('market_cap')
+        sector = result.get('sector', '')
+        industry = result.get('industry', '')
+
+        stock_info_text = f"""
+<b>{symbol}</b> - {name}<br><br>
+<b>当前价格:</b> ${self._format_number(current_price)}<br>
+<b>市值:</b> ${self._format_number(market_cap)}<br>
+<b>行业:</b> {sector or '--'}<br>
+<b>细分行业:</b> {industry or '--'}
+        """
+        self._stock_info_label.setText(stock_info_text)
+
+        valuation_metrics = result.get('valuation_metrics', {})
+        metrics_data = [
+            ("滚动市盈率 (PE TTM)", valuation_metrics.get('pe_trailing')),
+            ("预期市盈率 (PE Forward)", valuation_metrics.get('pe_forward')),
+            ("市净率 (PB)", valuation_metrics.get('pb_ratio')),
+            ("市盈增长比 (PEG)", valuation_metrics.get('peg_ratio')),
+            ("市销率 (PS)", valuation_metrics.get('price_to_sales')),
+            ("企业价值倍数 (EV/EBITDA)", valuation_metrics.get('ev_to_ebitda')),
+            ("股息率 (%)", valuation_metrics.get('dividend_yield')),
+            ("自由现金流 (FCF)", valuation_metrics.get('free_cash_flow')),
+            ("每股自由现金流", valuation_metrics.get('fcf_per_share')),
+        ]
+
+        self._valuation_table.setRowCount(len(metrics_data))
+        for row, (label, value) in enumerate(metrics_data):
+            self._valuation_table.setItem(row, 0, QTableWidgetItem(label))
+            
+            value_item = QTableWidgetItem(self._format_number(value))
+            
+            if "PE" in label or "PB" in label or "PS" in label or "EV/EBITDA" in label:
+                if value is not None:
+                    if label == "滚动市盈率 (PE TTM)":
+                        if value < 10:
+                            value_item.setForeground(QColor(0, 150, 0))
+                        elif value < 15:
+                            value_item.setForeground(QColor(0, 100, 200))
+                        elif value < 25:
+                            value_item.setForeground(QColor(150, 100, 0))
+                        else:
+                            value_item.setForeground(QColor(200, 0, 0))
+                    elif label == "市净率 (PB)":
+                        if value < 1:
+                            value_item.setForeground(QColor(0, 150, 0))
+                        elif value < 2:
+                            value_item.setForeground(QColor(0, 100, 200))
+                        elif value < 3:
+                            value_item.setForeground(QColor(150, 100, 0))
+                        else:
+                            value_item.setForeground(QColor(200, 0, 0))
+                    elif label == "市盈增长比 (PEG)":
+                        if value < 1:
+                            value_item.setForeground(QColor(0, 150, 0))
+                        elif value < 1.5:
+                            value_item.setForeground(QColor(0, 100, 200))
+                        elif value < 2:
+                            value_item.setForeground(QColor(150, 100, 0))
+                        else:
+                            value_item.setForeground(QColor(200, 0, 0))
+                    elif label == "股息率 (%)":
+                        if value and value >= 3:
+                            value_item.setForeground(QColor(0, 150, 0))
+                        elif value and value >= 2:
+                            value_item.setForeground(QColor(0, 100, 200))
+                        elif value and value >= 1:
+                            value_item.setForeground(QColor(150, 100, 0))
+            
+            self._valuation_table.setItem(row, 1, value_item)
+
+        dcf_analysis = result.get('dcf_analysis', {})
+        intrinsic_value = dcf_analysis.get('intrinsic_value')
+        safe_price = dcf_analysis.get('safe_price')
+        margin_of_safety = dcf_analysis.get('margin_of_safety')
+        assumptions = dcf_analysis.get('assumptions', {})
+
+        dcf_text = f"""
+<b>DCF折现现金流估值结果:</b><br><br>
+<b>内在价值:</b> ${self._format_number(intrinsic_value)}<br>
+<b>安全价格 (25%安全边际):</b> ${self._format_number(safe_price)}<br>
+<b>安全边际:</b> <span style="color: {'green' if margin_of_safety and margin_of_safety > 0 else 'red'}">{margin_of_safety:+.2f}%</span> if margin_of_safety is not None else "--"
+<br><br>
+<b>假设参数:</b><br>
+- 预期增长率: {assumptions.get('growth_rate', '--')}%<br>
+- 永续增长率: {assumptions.get('terminal_growth', '--')}%<br>
+- 折现率: {assumptions.get('discount_rate', '--')}%<br>
+- 安全边际: {assumptions.get('margin_of_safety_pct', '--')}%
+        """
+        
+        if margin_of_safety is not None:
+            mos_text = f"<span style=\"color: {'green' if margin_of_safety > 0 else 'red'}\">{margin_of_safety:+.2f}%</span>"
+        else:
+            mos_text = "--"
+        
+        dcf_text = f"""
+<b>DCF折现现金流估值结果:</b><br><br>
+<b>内在价值:</b> ${self._format_number(intrinsic_value)}<br>
+<b>安全价格 (25%安全边际):</b> ${self._format_number(safe_price)}<br>
+<b>安全边际:</b> {mos_text}<br><br>
+<b>假设参数:</b><br>
+- 预期增长率: {assumptions.get('growth_rate', '--')}%<br>
+- 永续增长率: {assumptions.get('terminal_growth', '--')}%<br>
+- 折现率: {assumptions.get('discount_rate', '--')}%<br>
+- 安全边际: {assumptions.get('margin_of_safety_pct', '--')}%
+        """
+        self._dcf_label.setText(dcf_text)
+
+        radar_data = result.get('radar_data', {})
+        labels = radar_data.get('labels', [])
+        values = radar_data.get('values', [])
+        dimension_scores = radar_data.get('dimension_scores', {})
+
+        if labels and values:
+            self._radar_chart.set_data(labels, values, dimension_scores)
+
+        scores = result.get('scores', {})
+        price_score = scores.get('price_reasonableness', {}).get('total', 0)
+        growth_score = scores.get('growth', {}).get('total', 0)
+        safety_score = scores.get('safety', {}).get('total', 0)
+        total_score = scores.get('total', 0)
+
+        valuation_summary = result.get('valuation_summary', {})
+        status = valuation_summary.get('status', '')
+
+        self._total_score_display.set_score(total_score, status)
+        self._price_score_bar.set_score(price_score, "价格合理性")
+        self._growth_score_bar.set_score(growth_score, "成长性")
+        self._safety_score_bar.set_score(safety_score, "安全性")
+
+        reasonable_low = valuation_summary.get('reasonable_price_low')
+        reasonable_high = valuation_summary.get('reasonable_price_high')
+
+        status_color = QColor(0, 150, 0)
+        if status == "显著低估" or status == "合理偏低":
+            status_color = QColor(0, 150, 0)
+        elif status == "估值合理":
+            status_color = QColor(0, 100, 200)
+        elif status == "合理偏高" or status == "高估":
+            status_color = QColor(200, 0, 0)
+
+        summary_text = f"""
+<b>综合估值状态:</b> <span style=\"color: rgb({status_color.red()}, {status_color.green()}, {status_color.blue()}); font-weight: bold;\">{status}</span><br><br>
+<b>合理价格区间:</b><br>
+- 下限: ${self._format_number(reasonable_low)}<br>
+- 上限: ${self._format_number(reasonable_high)}<br><br>
+<b>各维度得分:</b><br>
+- 价格合理性: {price_score:.1f}/100<br>
+- 成长性: {growth_score:.1f}/100<br>
+- 安全性: {safety_score:.1f}/100<br>
+- 综合评分: {total_score:.1f}/100
+        """
+        self._summary_label.setText(summary_text)
+
+    def _on_analysis_error(self, error_msg: str):
+        self._progress_bar.setVisible(False)
+        self._analyze_btn.setEnabled(True)
+        self._analyze_all_btn.setEnabled(True)
+        QMessageBox.warning(self, "错误", f"分析失败: {error_msg}")
+
+    def refresh(self):
+        self._update_symbol_combo()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1290,11 +1727,13 @@ class MainWindow(QMainWindow):
         self._watchlist_tab = WatchlistTab()
         self._news_tab = NewsTab()
         self._screener_tab = ScreenerTab()
+        self._valuation_tab = ValuationTab()
         self._settings_tab = SettingsTab()
 
         self._tab_widget.addTab(self._watchlist_tab, "自选股")
         self._tab_widget.addTab(self._news_tab, "资讯")
         self._tab_widget.addTab(self._screener_tab, "选股工具")
+        self._tab_widget.addTab(self._valuation_tab, "估值分析")
         self._tab_widget.addTab(self._settings_tab, "设置")
 
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -1346,8 +1785,12 @@ class MainWindow(QMainWindow):
         screener_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(2))
         view_menu.addAction(screener_action)
 
+        valuation_action = QAction("估值分析(&V)", self)
+        valuation_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(3))
+        view_menu.addAction(valuation_action)
+
         settings_action = QAction("设置(&T)", self)
-        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(3))
+        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(4))
         view_menu.addAction(settings_action)
 
         help_menu = menubar.addMenu("帮助(&H)")
@@ -1374,6 +1817,8 @@ class MainWindow(QMainWindow):
         elif index == 2:
             self._status_bar.showMessage("选股工具页面")
         elif index == 3:
+            self._status_bar.showMessage("估值分析页面")
+        elif index == 4:
             self._status_bar.showMessage("设置页面")
 
     def _refresh_current_tab(self):
@@ -1385,6 +1830,8 @@ class MainWindow(QMainWindow):
         elif current_index == 2:
             self._screener_tab.refresh()
         elif current_index == 3:
+            self._valuation_tab.refresh()
+        elif current_index == 4:
             self._settings_tab.refresh()
 
         self._status_bar.showMessage(f"手动刷新于 {datetime.now().strftime('%H:%M:%S')}")
@@ -1406,7 +1853,8 @@ class MainWindow(QMainWindow):
             "- 自选股管理\n"
             "- 实时行情监控\n"
             "- 新闻资讯获取\n"
-            "- 智能选股工具"
+            "- 智能选股工具\n"
+            "- 估值分析功能"
         )
 
     def closeEvent(self, event):
