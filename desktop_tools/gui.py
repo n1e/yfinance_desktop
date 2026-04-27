@@ -2,9 +2,9 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QLabel, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLineEdit, QGroupBox,
-    QSpinBox, QCheckBox, QComboBox, QProgressBar, QTextEdit,
+    QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox, QProgressBar, QTextEdit,
     QSplitter, QMessageBox, QStatusBar, QToolBar, QAction,
-    QMenu, QMenuBar, QFrame, QSizePolicy
+    QMenu, QMenuBar, QFrame, QSizePolicy, QDialog, QDialogButtonBox, QFormLayout
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QUrl
 from PyQt5.QtGui import QFont, QColor, QDesktopServices, QIcon
@@ -688,7 +688,7 @@ class WatchlistTab(QWidget):
         self._sort_combo = QComboBox()
         self._sort_combo.addItems([
             "股票代码", "名称", "当前价格", "涨跌幅",
-            "成交量", "市值"
+            "成交量", "市值", "持仓数量", "盈亏金额", "盈亏百分比", "持仓市值"
         ])
         control_layout.addWidget(self._sort_combo)
 
@@ -700,7 +700,38 @@ class WatchlistTab(QWidget):
 
         layout.addWidget(control_group)
 
-        stats_group = QGroupBox("统计信息")
+        portfolio_group = QGroupBox("账户总览")
+        portfolio_layout = QHBoxLayout(portfolio_group)
+
+        self._portfolio_total_value_label = QLabel("总市值: $0.00")
+        self._portfolio_total_value_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        portfolio_layout.addWidget(self._portfolio_total_value_label)
+
+        portfolio_layout.addSpacing(15)
+
+        self._portfolio_total_cost_label = QLabel("总投入: $0.00")
+        self._portfolio_total_cost_label.setStyleSheet("font-size: 14px;")
+        portfolio_layout.addWidget(self._portfolio_total_cost_label)
+
+        portfolio_layout.addSpacing(15)
+
+        self._portfolio_total_pnl_label = QLabel("总盈亏: $0.00 (0.00%)")
+        self._portfolio_total_pnl_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        portfolio_layout.addWidget(self._portfolio_total_pnl_label)
+
+        portfolio_layout.addSpacing(15)
+
+        self._portfolio_stocks_label = QLabel("持仓股票: 0")
+        portfolio_layout.addWidget(self._portfolio_stocks_label)
+
+        portfolio_layout.addStretch()
+
+        self._last_update_label = QLabel("最后更新: --")
+        portfolio_layout.addWidget(self._last_update_label)
+
+        layout.addWidget(portfolio_group)
+
+        stats_group = QGroupBox("行情统计")
         stats_layout = QHBoxLayout(stats_group)
 
         self._total_label = QLabel("股票总数: 0")
@@ -721,22 +752,22 @@ class WatchlistTab(QWidget):
         self._avg_change_label = QLabel("平均涨跌幅: 0.00%")
         stats_layout.addWidget(self._avg_change_label)
 
-        self._last_update_label = QLabel("最后更新: --")
         stats_layout.addStretch()
-        stats_layout.addWidget(self._last_update_label)
 
         layout.addWidget(stats_group)
 
         self._table = QTableWidget()
-        self._table.setColumnCount(11)
+        self._table.setColumnCount(16)
         self._table.setHorizontalHeaderLabels([
             "股票代码", "名称", "当前价格", "涨跌", "涨跌幅",
+            "持仓数量", "成本价", "持仓市值", "盈亏金额", "盈亏百分比",
             "开盘价", "最高价", "最低价", "成交量", "市值", "货币"
         ])
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
 
         layout.addWidget(self._table)
 
@@ -748,6 +779,7 @@ class WatchlistTab(QWidget):
         self._sort_combo.currentIndexChanged.connect(self._sort_table)
         self._sort_order_check.stateChanged.connect(self._sort_table)
         self._watchlist_manager.add_update_callback(self._on_data_updated)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
 
     def _add_stock(self):
         symbol = self._symbol_input.text().strip().upper()
@@ -802,7 +834,11 @@ class WatchlistTab(QWidget):
             "当前价格": "current_price",
             "涨跌幅": "change_percent",
             "成交量": "volume",
-            "市值": "market_cap"
+            "市值": "market_cap",
+            "持仓数量": "quantity",
+            "盈亏金额": "pnl_amount",
+            "盈亏百分比": "pnl_percent",
+            "持仓市值": "current_value"
         }
         sort_by = sort_field_map.get(self._sort_combo.currentText(), "symbol")
         ascending = not self._sort_order_check.isChecked()
@@ -810,6 +846,10 @@ class WatchlistTab(QWidget):
         quotes = self._watchlist_manager.get_sorted_quotes(sort_by=sort_by, ascending=ascending)
 
         self._table.setRowCount(len(quotes))
+
+        green_color = QColor(34, 197, 94)
+        red_color = QColor(239, 68, 68)
+        black_color = QColor(0, 0, 0)
 
         for row, quote in enumerate(quotes):
             self._table.setItem(row, 0, QTableWidgetItem(quote.get('symbol', '')))
@@ -826,18 +866,51 @@ class WatchlistTab(QWidget):
             change_pct_item = QTableWidgetItem(f"{change_pct:+.2f}%" if change_pct else "--")
 
             if change_pct > 0:
-                color = QColor(0, 150, 0)
+                change_color = green_color
             elif change_pct < 0:
-                color = QColor(200, 0, 0)
+                change_color = red_color
             else:
-                color = QColor(0, 0, 0)
+                change_color = black_color
 
-            change_item.setForeground(color)
-            change_pct_item.setForeground(color)
-            current_item.setForeground(color)
+            change_item.setForeground(change_color)
+            change_pct_item.setForeground(change_color)
+            current_item.setForeground(change_color)
 
             self._table.setItem(row, 3, change_item)
             self._table.setItem(row, 4, change_pct_item)
+
+            position = quote.get('position', {})
+            pnl = quote.get('pnl', {})
+
+            quantity = position.get('quantity', 0)
+            cost_price = position.get('cost_price', 0)
+            current_value = pnl.get('current_value', 0)
+            pnl_amount = pnl.get('pnl_amount', 0)
+            pnl_percent = pnl.get('pnl_percent', 0)
+
+            quantity_item = QTableWidgetItem(f"{quantity}" if quantity > 0 else "--")
+            cost_price_item = QTableWidgetItem(f"${cost_price:.2f}" if cost_price > 0 else "--")
+            current_value_item = QTableWidgetItem(f"${current_value:,.2f}" if current_value > 0 else "--")
+            pnl_amount_item = QTableWidgetItem(f"${pnl_amount:+,.2f}" if quantity > 0 else "--")
+            pnl_percent_item = QTableWidgetItem(f"{pnl_percent:+.2f}%" if quantity > 0 else "--")
+
+            if quantity > 0 and current_value > 0:
+                if pnl_amount > 0:
+                    pnl_color = green_color
+                elif pnl_amount < 0:
+                    pnl_color = red_color
+                else:
+                    pnl_color = black_color
+
+                current_value_item.setForeground(pnl_color)
+                pnl_amount_item.setForeground(pnl_color)
+                pnl_percent_item.setForeground(pnl_color)
+
+            self._table.setItem(row, 5, quantity_item)
+            self._table.setItem(row, 6, cost_price_item)
+            self._table.setItem(row, 7, current_value_item)
+            self._table.setItem(row, 8, pnl_amount_item)
+            self._table.setItem(row, 9, pnl_percent_item)
 
             open_price = quote.get('open', 0)
             high = quote.get('high', 0)
@@ -845,12 +918,12 @@ class WatchlistTab(QWidget):
             volume = quote.get('volume', 0)
             market_cap = quote.get('market_cap', 0)
 
-            self._table.setItem(row, 5, QTableWidgetItem(f"{open_price:.2f}" if open_price else "--"))
-            self._table.setItem(row, 6, QTableWidgetItem(f"{high:.2f}" if high else "--"))
-            self._table.setItem(row, 7, QTableWidgetItem(f"{low:.2f}" if low else "--"))
-            self._table.setItem(row, 8, QTableWidgetItem(self._format_number(volume)))
-            self._table.setItem(row, 9, QTableWidgetItem(self._format_market_cap(market_cap)))
-            self._table.setItem(row, 10, QTableWidgetItem(quote.get('currency', '')))
+            self._table.setItem(row, 10, QTableWidgetItem(f"{open_price:.2f}" if open_price else "--"))
+            self._table.setItem(row, 11, QTableWidgetItem(f"{high:.2f}" if high else "--"))
+            self._table.setItem(row, 12, QTableWidgetItem(f"{low:.2f}" if low else "--"))
+            self._table.setItem(row, 13, QTableWidgetItem(self._format_number(volume)))
+            self._table.setItem(row, 14, QTableWidgetItem(self._format_market_cap(market_cap)))
+            self._table.setItem(row, 15, QTableWidgetItem(quote.get('currency', '')))
 
     def _update_stats(self):
         stats = self._watchlist_manager.get_total_value()
@@ -861,6 +934,28 @@ class WatchlistTab(QWidget):
 
         avg_change = stats['avg_change_percent']
         self._avg_change_label.setText(f"平均涨跌幅: {avg_change:+.2f}%")
+
+        portfolio = stats.get('portfolio', {})
+        total_value = portfolio.get('total_value', 0)
+        total_cost = portfolio.get('total_cost', 0)
+        total_pnl = portfolio.get('total_pnl', 0)
+        pnl_percent = portfolio.get('pnl_percent', 0)
+        portfolio_stocks = portfolio.get('total_stocks', 0)
+
+        self._portfolio_total_value_label.setText(f"总市值: ${total_value:,.2f}")
+        self._portfolio_total_cost_label.setText(f"总投入: ${total_cost:,.2f}")
+        
+        pnl_text = f"总盈亏: ${total_pnl:+,.2f} ({pnl_percent:+.2f}%)"
+        self._portfolio_total_pnl_label.setText(pnl_text)
+        
+        if total_pnl > 0:
+            self._portfolio_total_pnl_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #22c55e;")
+        elif total_pnl < 0:
+            self._portfolio_total_pnl_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #ef4444;")
+        else:
+            self._portfolio_total_pnl_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+
+        self._portfolio_stocks_label.setText(f"持仓股票: {portfolio_stocks}")
 
         last_update = self._watchlist_manager.last_update
         if last_update:
@@ -885,8 +980,97 @@ class WatchlistTab(QWidget):
             return f"{cap/1_000_000:.2f}M"
         return f"{cap:.0f}" if cap else "--"
 
+    def _show_context_menu(self, pos):
+        row = self._table.rowAt(pos.y())
+        if row < 0:
+            return
+
+        symbol_item = self._table.item(row, 0)
+        if not symbol_item:
+            return
+
+        symbol = symbol_item.text()
+
+        menu = QMenu(self)
+        edit_action = menu.addAction("编辑持仓")
+        remove_action = menu.addAction("从自选股移除")
+
+        action = menu.exec_(self._table.viewport().mapToGlobal(pos))
+
+        if action == edit_action:
+            self._edit_position(symbol)
+        elif action == remove_action:
+            self._remove_single_stock(symbol)
+
+    def _edit_position(self, symbol: str):
+        position = self._watchlist_manager.get_position(symbol)
+        dialog = PositionEditDialog(symbol, position, self)
+        if dialog.exec_() == QDialog.Accepted:
+            quantity, cost_price = dialog.get_position_data()
+            self._watchlist_manager.set_position(symbol, quantity, cost_price)
+
+    def _remove_single_stock(self, symbol: str):
+        reply = QMessageBox.question(
+            self, "确认",
+            f"确定要移除股票 {symbol} 吗？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self._watchlist_manager.remove_stock(symbol)
+
     def refresh(self):
         self._refresh_data()
+
+
+class PositionEditDialog(QDialog):
+    def __init__(self, symbol: str, position=None, parent=None):
+        super().__init__(parent)
+        self._symbol = symbol
+        self._position = position
+        self._init_ui()
+
+    def _init_ui(self):
+        self.setWindowTitle(f"编辑持仓 - {self._symbol}")
+        self.setMinimumWidth(350)
+
+        layout = QVBoxLayout(self)
+
+        form_layout = QFormLayout()
+
+        self._quantity_spin = QSpinBox()
+        self._quantity_spin.setRange(0, 1000000)
+        self._quantity_spin.setSingleStep(1)
+        self._quantity_spin.setSuffix(" 股")
+        if self._position:
+            self._quantity_spin.setValue(self._position.quantity)
+        form_layout.addRow("持仓数量:", self._quantity_spin)
+
+        self._cost_price_spin = QDoubleSpinBox()
+        self._cost_price_spin.setRange(0.01, 1000000.0)
+        self._cost_price_spin.setSingleStep(0.01)
+        self._cost_price_spin.setDecimals(2)
+        self._cost_price_spin.setPrefix("$")
+        if self._position:
+            self._cost_price_spin.setValue(self._position.cost_price if self._position.cost_price > 0 else 1.0)
+        form_layout.addRow("买入成本价:", self._cost_price_spin)
+
+        layout.addLayout(form_layout)
+
+        if self._position and self._position.quantity > 0:
+            total_cost = self._position.quantity * self._position.cost_price
+            info_label = QLabel(f"当前持仓市值: {self._position.quantity} 股 x ${self._position.cost_price:.2f} = ${total_cost:,.2f}")
+            info_label.setStyleSheet("color: #666; font-size: 12px;")
+            layout.addWidget(info_label)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def get_position_data(self):
+        return self._quantity_spin.value(), self._cost_price_spin.value()
 
 
 class NewsTab(QWidget):
