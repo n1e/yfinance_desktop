@@ -1,7 +1,7 @@
 import threading
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from datetime import datetime
-from .config import ConfigManager
+from .config import ConfigManager, Position
 from .data_provider import DataProvider
 
 
@@ -24,6 +24,7 @@ class WatchlistManager:
         self._config = ConfigManager()
         self._data_provider = DataProvider()
         self._watchlist: List[str] = self._config.load_watchlist()
+        self._portfolio: Dict[str, Position] = self._config.load_portfolio()
         self._quotes: Dict[str, Optional[Dict[str, Any]]] = {}
         self._last_update: Optional[datetime] = None
         self._refresh_thread: Optional[threading.Thread] = None
@@ -44,6 +45,101 @@ class WatchlistManager:
     def last_update(self) -> Optional[datetime]:
         """获取最后更新时间"""
         return self._last_update
+
+    @property
+    def portfolio(self) -> Dict[str, Position]:
+        """获取当前投资组合持仓"""
+        return self._portfolio.copy()
+
+    def set_position(self, symbol: str, quantity: int, cost_price: float) -> bool:
+        """
+        设置或更新股票持仓
+        
+        参数:
+            symbol: 股票代码
+            quantity: 持仓数量（0 表示移除持仓）
+            cost_price: 买入成本价
+            
+        返回:
+            是否成功设置
+        """
+        symbol = symbol.upper().strip()
+        if not symbol:
+            return False
+
+        if quantity <= 0:
+            if symbol in self._portfolio:
+                del self._portfolio[symbol]
+                self._config.save_portfolio(self._portfolio)
+                self._notify_update()
+            return True
+
+        position = Position(symbol=symbol, quantity=quantity, cost_price=cost_price)
+        self._portfolio[symbol] = position
+        self._config.save_portfolio(self._portfolio)
+        self._notify_update()
+        return True
+
+    def get_position(self, symbol: str) -> Optional[Position]:
+        """
+        获取指定股票的持仓信息
+        
+        参数:
+            symbol: 股票代码
+            
+        返回:
+            持仓信息，如果不存在则返回 None
+        """
+        return self._portfolio.get(symbol.upper().strip())
+
+    def calculate_pnl(self, symbol: str) -> Dict[str, Any]:
+        """
+        计算指定股票的持仓盈亏
+        
+        参数:
+            symbol: 股票代码
+            
+        返回:
+            包含盈亏信息的字典：
+            - has_position: 是否有持仓
+            - quantity: 持仓数量
+            - cost_price: 成本价
+            - current_price: 当前价格
+            - cost_value: 总成本
+            - current_value: 当前市值
+            - pnl_amount: 盈亏金额
+            - pnl_percent: 盈亏百分比
+        """
+        symbol = symbol.upper().strip()
+        position = self._portfolio.get(symbol)
+        quote = self._quotes.get(symbol)
+
+        result = {
+            'has_position': False,
+            'quantity': 0,
+            'cost_price': 0.0,
+            'current_price': 0.0,
+            'cost_value': 0.0,
+            'current_value': 0.0,
+            'pnl_amount': 0.0,
+            'pnl_percent': 0.0,
+        }
+
+        if position and position.quantity > 0:
+            result['has_position'] = True
+            result['quantity'] = position.quantity
+            result['cost_price'] = position.cost_price
+            result['cost_value'] = position.cost_value
+
+            if quote and quote.get('current_price'):
+                current_price = quote.get('current_price', 0)
+                result['current_price'] = current_price
+                result['current_value'] = position.quantity * current_price
+                result['pnl_amount'] = result['current_value'] - result['cost_value']
+                if result['cost_value'] > 0:
+                    result['pnl_percent'] = (result['pnl_amount'] / result['cost_value']) * 100
+
+        return result
 
     def add_stock(self, symbol: str) -> bool:
         """
@@ -131,18 +227,20 @@ class WatchlistManager:
         ascending: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        获取排序后的行情数据列表
+        获取排序后的行情数据列表（包含持仓和盈亏信息）
         
         参数:
-            sort_by: 排序字段 ('symbol', 'name', 'current_price', 'change_percent', 'volume', 'market_cap')
+            sort_by: 排序字段 ('symbol', 'name', 'current_price', 'change_percent', 'volume', 'market_cap',
+                                  'quantity', 'cost_price', 'pnl_amount', 'pnl_percent', 'current_value')
             ascending: 是否升序
             
         返回:
-            排序后的行情数据列表
+            排序后的行情数据列表，每项包含 position 和 pnl 信息
         """
         valid_sort_fields = [
             'symbol', 'name', 'current_price', 'change', 'change_percent',
-            'volume', 'avg_volume', 'market_cap', 'pe_ratio'
+            'volume', 'avg_volume', 'market_cap', 'pe_ratio',
+            'quantity', 'cost_price', 'pnl_amount', 'pnl_percent', 'current_value'
         ]
 
         if sort_by not in valid_sort_fields:
@@ -152,10 +250,40 @@ class WatchlistManager:
         for symbol in self._watchlist:
             quote = self._quotes.get(symbol)
             if quote:
-                result.append(quote)
+                quote_copy = quote.copy()
+                position = self._portfolio.get(symbol)
+                if position:
+                    quote_copy['position'] = {
+                        'quantity': position.quantity,
+                        'cost_price': position.cost_price,
+                        'cost_value': position.cost_value
+                    }
+                else:
+                    quote_copy['position'] = {
+                        'quantity': 0,
+                        'cost_price': 0.0,
+                        'cost_value': 0.0
+                    }
+                
+                pnl = self.calculate_pnl(symbol)
+                quote_copy['pnl'] = pnl
+                
+                result.append(quote_copy)
+
+        def get_sort_key(item: Dict[str, Any]) -> Any:
+            if sort_by == 'symbol':
+                return item.get('symbol', '')
+            elif sort_by == 'name':
+                return item.get('name', '')
+            elif sort_by in ['quantity', 'cost_price']:
+                return item.get('position', {}).get(sort_by, 0)
+            elif sort_by in ['pnl_amount', 'pnl_percent', 'current_value']:
+                return item.get('pnl', {}).get(sort_by, 0)
+            else:
+                return item.get(sort_by, 0)
 
         result.sort(
-            key=lambda x: x.get(sort_by, 0) if sort_by != 'symbol' else x.get(sort_by, ''),
+            key=get_sort_key,
             reverse=not ascending
         )
 
@@ -223,12 +351,12 @@ class WatchlistManager:
             except Exception as e:
                 print(f"调用更新回调失败: {e}")
 
-    def get_total_value(self) -> Dict[str, float]:
+    def get_total_value(self) -> Dict[str, Any]:
         """
-        计算自选股的总市值等统计信息
+        计算自选股和投资组合的统计信息
         
         返回:
-            包含总市值、平均涨跌幅等统计信息的字典
+            包含总市值、平均涨跌幅、投资组合总览等统计信息的字典
         """
         total_market_cap = 0.0
         total_change_percent = 0.0
@@ -236,6 +364,11 @@ class WatchlistManager:
         up_count = 0
         down_count = 0
         flat_count = 0
+
+        portfolio_total_cost = 0.0
+        portfolio_total_value = 0.0
+        portfolio_total_pnl = 0.0
+        portfolio_count = 0
 
         for symbol in self._watchlist:
             quote = self._quotes.get(symbol)
@@ -252,7 +385,18 @@ class WatchlistManager:
                 else:
                     flat_count += 1
 
+            pnl = self.calculate_pnl(symbol)
+            if pnl['has_position']:
+                portfolio_count += 1
+                portfolio_total_cost += pnl['cost_value']
+                portfolio_total_value += pnl['current_value']
+                portfolio_total_pnl += pnl['pnl_amount']
+
         avg_change_percent = total_change_percent / count if count > 0 else 0
+
+        portfolio_pnl_percent = 0.0
+        if portfolio_total_cost > 0:
+            portfolio_pnl_percent = (portfolio_total_pnl / portfolio_total_cost) * 100
 
         return {
             'total_stocks': len(self._watchlist),
@@ -262,4 +406,11 @@ class WatchlistManager:
             'up_count': up_count,
             'down_count': down_count,
             'flat_count': flat_count,
+            'portfolio': {
+                'total_stocks': portfolio_count,
+                'total_cost': round(portfolio_total_cost, 2),
+                'total_value': round(portfolio_total_value, 2),
+                'total_pnl': round(portfolio_total_pnl, 2),
+                'pnl_percent': round(portfolio_pnl_percent, 2)
+            }
         }

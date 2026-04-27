@@ -1,8 +1,34 @@
 import json
 import os
 from pathlib import Path
-from dataclasses import dataclass, asdict
-from typing import List, Optional
+from dataclasses import dataclass, asdict, field
+from typing import List, Optional, Dict, Any
+
+
+@dataclass
+class Position:
+    symbol: str = ""
+    quantity: int = 0
+    cost_price: float = 0.0
+
+    @property
+    def cost_value(self) -> float:
+        return self.quantity * self.cost_price
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'symbol': self.symbol,
+            'quantity': self.quantity,
+            'cost_price': self.cost_price
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Position':
+        return cls(
+            symbol=data.get('symbol', ''),
+            quantity=data.get('quantity', 0),
+            cost_price=data.get('cost_price', 0.0)
+        )
 
 
 @dataclass
@@ -41,6 +67,7 @@ class ConfigManager:
         config_dir.mkdir(parents=True, exist_ok=True)
         self._config_file = config_dir / "config.json"
         self._watchlist_file = config_dir / "watchlist.json"
+        self._portfolio_file = config_dir / "portfolio.json"
 
     def _load_config(self):
         if self._config_file.exists():
@@ -114,3 +141,25 @@ class ConfigManager:
                 json.dump(tickers, f, indent=2, ensure_ascii=False)
         except IOError as e:
             print(f"保存自选股失败: {e}")
+
+    def load_portfolio(self) -> Dict[str, Position]:
+        portfolio = {}
+        if self._portfolio_file.exists():
+            try:
+                with open(self._portfolio_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for symbol, pos_data in data.items():
+                        portfolio[symbol.upper()] = Position.from_dict(pos_data)
+            except (json.JSONDecodeError, IOError):
+                pass
+        return portfolio
+
+    def save_portfolio(self, portfolio: Dict[str, Position]):
+        try:
+            data = {}
+            for symbol, position in portfolio.items():
+                data[symbol.upper()] = position.to_dict()
+            with open(self._portfolio_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except IOError as e:
+            print(f"保存持仓数据失败: {e}")
