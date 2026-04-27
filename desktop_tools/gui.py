@@ -20,6 +20,8 @@ from .screener import StockScreener
 from .valuation_analyzer import ValuationAnalyzer
 from .radar_chart import RadarChartWidget, DimensionScoreBar, TotalScoreDisplay
 from .market_indicators import MarketIndicators, IndicatorResult
+from .technical_analyzer import TechnicalAnalyzer
+from .technical_charts import PriceChartWidget, SignalDisplayWidget
 
 
 class ValuationTab(QWidget):
@@ -2159,6 +2161,392 @@ class MarketIndicatorRefreshThread(QThread):
             self.error_signal.emit(str(e))
 
 
+class TechnicalAnalysisTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._watchlist_manager = WatchlistManager()
+        self._technical_analyzer = TechnicalAnalyzer()
+        self._analysis_thread: Optional[TechnicalAnalysisThread] = None
+        self._current_data: Optional[Dict[str, Any]] = None
+        self._init_ui()
+        self._load_watchlist()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        control_group = QGroupBox("分析控制")
+        control_layout = QHBoxLayout(control_group)
+
+        control_layout.addWidget(QLabel("选择股票:"))
+        self._stock_combo = QComboBox()
+        self._stock_combo.setEditable(True)
+        self._stock_combo.setMinimumWidth(200)
+        control_layout.addWidget(self._stock_combo)
+
+        control_layout.addWidget(QLabel("时间周期:"))
+        self._period_combo = QComboBox()
+        self._period_combo.addItems(["1个月", "3个月", "6个月", "1年", "2年", "5年"])
+        self._period_combo.setCurrentIndex(3)
+        control_layout.addWidget(self._period_combo)
+
+        control_layout.addWidget(QLabel("数据频率:"))
+        self._interval_combo = QComboBox()
+        self._interval_combo.addItems(["日线", "周线", "月线"])
+        self._interval_combo.setCurrentIndex(0)
+        control_layout.addWidget(self._interval_combo)
+
+        self._analyze_btn = QPushButton("开始分析")
+        self._analyze_btn.setMinimumHeight(35)
+        self._analyze_btn.clicked.connect(self._analyze_current_stock)
+        control_layout.addWidget(self._analyze_btn)
+
+        self._refresh_btn = QPushButton("刷新自选股列表")
+        self._refresh_btn.setMinimumHeight(35)
+        self._refresh_btn.clicked.connect(self._load_watchlist)
+        control_layout.addWidget(self._refresh_btn)
+
+        control_layout.addStretch()
+
+        layout.addWidget(control_group)
+
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setVisible(False)
+        layout.addWidget(self._progress_bar)
+
+        self._status_label = QLabel("请选择股票并开始分析")
+        self._status_label.setStyleSheet("color: #666; font-size: 14px;")
+        layout.addWidget(self._status_label)
+
+        main_splitter = QSplitter(Qt.Vertical)
+
+        top_splitter = QSplitter(Qt.Horizontal)
+
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(5)
+
+        self._price_chart = PriceChartWidget()
+        self._price_chart.set_title("价格走势与均线")
+        left_layout.addWidget(self._price_chart, 1)
+
+        top_splitter.addWidget(left_widget)
+
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(5)
+
+        self._signal_display = SignalDisplayWidget()
+        right_layout.addWidget(self._signal_display, 1)
+
+        top_splitter.addWidget(right_widget)
+
+        top_splitter.setSizes([700, 300])
+
+        main_splitter.addWidget(top_splitter)
+
+        indicator_group = QGroupBox("技术指标")
+        indicator_layout = QVBoxLayout(indicator_group)
+        indicator_layout.setContentsMargins(5, 5, 5, 5)
+        indicator_layout.setSpacing(5)
+
+        indicator_control_layout = QHBoxLayout()
+        indicator_control_layout.addWidget(QLabel("选择指标:"))
+        
+        self._indicator_combo = QComboBox()
+        self._indicator_combo.addItems([
+            "MACD", "RSI", "布林带", "KDJ", "成交量"
+        ])
+        self._indicator_combo.currentIndexChanged.connect(self._on_indicator_changed)
+        indicator_control_layout.addWidget(self._indicator_combo)
+        indicator_control_layout.addStretch()
+        indicator_layout.addLayout(indicator_control_layout)
+
+        self._indicator_chart = PriceChartWidget()
+        self._indicator_chart.set_title("MACD")
+        indicator_layout.addWidget(self._indicator_chart, 1)
+
+        main_splitter.addWidget(indicator_group)
+
+        main_splitter.setSizes([500, 400])
+
+        layout.addWidget(main_splitter, 1)
+
+        self._latest_group = QGroupBox("最新指标值")
+        latest_layout = QHBoxLayout(self._latest_group)
+        latest_layout.setSpacing(20)
+
+        self._latest_labels = {}
+        indicators = [
+            ("RSI", "rsi"),
+            ("MACD", "macd"),
+            ("信号线", "macd_signal"),
+            ("柱状图", "macd_histogram"),
+            ("K值", "k"),
+            ("D值", "d"),
+            ("J值", "j"),
+            ("%b", "percent_b")
+        ]
+
+        for label_text, key in indicators:
+            group = QVBoxLayout()
+            label = QLabel(label_text + ":")
+            label.setStyleSheet("font-weight: bold; color: #666;")
+            group.addWidget(label)
+            
+            value_label = QLabel("--")
+            value_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+            value_label.setAlignment(Qt.AlignCenter)
+            group.addWidget(value_label)
+            
+            latest_layout.addLayout(group)
+            self._latest_labels[key] = value_label
+
+        latest_layout.addStretch()
+        layout.addWidget(self._latest_group)
+
+    def _load_watchlist(self):
+        self._stock_combo.clear()
+        symbols = self._watchlist_manager.watchlist
+        quotes = self._watchlist_manager.get_sorted_quotes()
+        
+        for quote in quotes:
+            symbol = quote.get('symbol', '')
+            name = quote.get('name', '')
+            if symbol:
+                display_text = f"{symbol}"
+                if name:
+                    display_text += f" - {name}"
+                self._stock_combo.addItem(display_text, symbol)
+        
+        for symbol in symbols:
+            exists = False
+            for i in range(self._stock_combo.count()):
+                if self._stock_combo.itemData(i) == symbol:
+                    exists = True
+                    break
+            if not exists:
+                self._stock_combo.addItem(symbol, symbol)
+        
+        self._status_label.setText(f"已加载 {len(symbols)} 只自选股")
+
+    def _get_selected_symbol(self) -> str:
+        index = self._stock_combo.currentIndex()
+        if index >= 0:
+            symbol = self._stock_combo.itemData(index)
+            if symbol:
+                return symbol
+        
+        text = self._stock_combo.currentText().strip()
+        if text:
+            if ' - ' in text:
+                return text.split(' - ')[0].strip()
+            return text
+        return ''
+
+    def _get_period_param(self) -> str:
+        period_map = {
+            0: '1mo',
+            1: '3mo',
+            2: '6mo',
+            3: '1y',
+            4: '2y',
+            5: '5y'
+        }
+        return period_map.get(self._period_combo.currentIndex(), '1y')
+
+    def _get_interval_param(self) -> str:
+        interval_map = {
+            0: '1d',
+            1: '1wk',
+            2: '1mo'
+        }
+        return interval_map.get(self._interval_combo.currentIndex(), '1d')
+
+    def _analyze_current_stock(self):
+        symbol = self._get_selected_symbol()
+        if not symbol:
+            QMessageBox.warning(self, "提示", "请选择或输入股票代码")
+            return
+        
+        self._analyze_stock(symbol)
+
+    def _analyze_stock(self, symbol: str):
+        if self._analysis_thread and self._analysis_thread.isRunning():
+            QMessageBox.information(self, "提示", "分析正在进行中，请稍候...")
+            return
+
+        self._analyze_btn.setEnabled(False)
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setRange(0, 0)
+        self._status_label.setText(f"正在分析 {symbol}...")
+
+        period = self._get_period_param()
+        interval = self._get_interval_param()
+
+        self._analysis_thread = TechnicalAnalysisThread(
+            self._technical_analyzer, symbol, period, interval
+        )
+        self._analysis_thread.finished_signal.connect(self._on_analysis_finished)
+        self._analysis_thread.error_signal.connect(self._on_analysis_error)
+        self._analysis_thread.start()
+
+    def _on_analysis_finished(self, result: Dict[str, Any]):
+        self._analyze_btn.setEnabled(True)
+        self._progress_bar.setVisible(False)
+
+        if not result:
+            self._status_label.setText("分析完成，但没有有效结果")
+            return
+
+        if not result.get('success'):
+            self._status_label.setText(f"分析失败: {result.get('error', '未知错误')}")
+            return
+
+        self._current_data = result.get('data')
+        self._display_result(self._current_data)
+        self._status_label.setText(f"分析完成: {result.get('symbol')}")
+
+    def _on_analysis_error(self, error_msg: str):
+        self._analyze_btn.setEnabled(True)
+        self._progress_bar.setVisible(False)
+        self._status_label.setText(f"分析出错: {error_msg}")
+        QMessageBox.critical(self, "错误", f"分析过程中出错:\n{error_msg}")
+
+    def _display_result(self, data: Dict[str, Any]):
+        self._price_chart.set_data(data, 'price')
+        
+        latest = data.get('latest', {})
+        
+        rsi = latest.get('rsi')
+        if rsi is not None:
+            self._latest_labels['rsi'].setText(f"{rsi:.2f}")
+            if rsi < 30:
+                self._latest_labels['rsi'].setStyleSheet("font-size: 14px; font-weight: bold; color: #22c55e;")
+            elif rsi > 70:
+                self._latest_labels['rsi'].setStyleSheet("font-size: 14px; font-weight: bold; color: #ef4444;")
+            else:
+                self._latest_labels['rsi'].setStyleSheet("font-size: 14px; font-weight: bold; color: #3b82f6;")
+        else:
+            self._latest_labels['rsi'].setText("--")
+            self._latest_labels['rsi'].setStyleSheet("font-size: 14px; font-weight: bold;")
+
+        macd = latest.get('macd')
+        macd_signal = latest.get('macd_signal')
+        macd_histogram = latest.get('macd_histogram')
+        
+        if macd is not None:
+            self._latest_labels['macd'].setText(f"{macd:.4f}")
+        else:
+            self._latest_labels['macd'].setText("--")
+            
+        if macd_signal is not None:
+            self._latest_labels['macd_signal'].setText(f"{macd_signal:.4f}")
+        else:
+            self._latest_labels['macd_signal'].setText("--")
+            
+        if macd_histogram is not None:
+            self._latest_labels['macd_histogram'].setText(f"{macd_histogram:.4f}")
+            if macd_histogram > 0:
+                self._latest_labels['macd_histogram'].setStyleSheet("font-size: 14px; font-weight: bold; color: #22c55e;")
+            else:
+                self._latest_labels['macd_histogram'].setStyleSheet("font-size: 14px; font-weight: bold; color: #ef4444;")
+        else:
+            self._latest_labels['macd_histogram'].setText("--")
+            self._latest_labels['macd_histogram'].setStyleSheet("font-size: 14px; font-weight: bold;")
+
+        k = latest.get('k')
+        d = latest.get('d')
+        j = latest.get('j')
+        
+        if k is not None:
+            self._latest_labels['k'].setText(f"{k:.2f}")
+        else:
+            self._latest_labels['k'].setText("--")
+            
+        if d is not None:
+            self._latest_labels['d'].setText(f"{d:.2f}")
+        else:
+            self._latest_labels['d'].setText("--")
+            
+        if j is not None:
+            self._latest_labels['j'].setText(f"{j:.2f}")
+        else:
+            self._latest_labels['j'].setText("--")
+
+        percent_b = latest.get('percent_b')
+        if percent_b is not None:
+            self._latest_labels['percent_b'].setText(f"{percent_b:.2f}")
+        else:
+            self._latest_labels['percent_b'].setText("--")
+
+        signals = data.get('signals', {})
+        if signals:
+            self._signal_display.set_signals(signals)
+
+        self._on_indicator_changed()
+
+    def _on_indicator_changed(self):
+        if self._current_data is None:
+            return
+
+        indicator_index = self._indicator_combo.currentIndex()
+        
+        indicator_map = {
+            0: ('macd', 'MACD'),
+            1: ('rsi', 'RSI'),
+            2: ('bollinger', '布林带'),
+            3: ('kdj', 'KDJ'),
+            4: ('volume', '成交量')
+        }
+
+        indicator_type, title = indicator_map.get(indicator_index, ('macd', 'MACD'))
+        self._indicator_chart.set_title(title)
+        self._indicator_chart.set_data(self._current_data, indicator_type)
+
+    def refresh(self):
+        self._load_watchlist()
+
+
+class TechnicalAnalysisThread(QThread):
+    finished_signal = pyqtSignal(dict)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, analyzer: TechnicalAnalyzer, symbol: str, period: str, interval: str):
+        super().__init__()
+        self._analyzer = analyzer
+        self._symbol = symbol
+        self._period = period
+        self._interval = interval
+
+    def run(self):
+        try:
+            data = self._analyzer.analyze_all_indicators(
+                self._symbol,
+                period=self._period,
+                interval=self._interval
+            )
+
+            if data:
+                self.finished_signal.emit({
+                    'success': True,
+                    'symbol': self._symbol.upper(),
+                    'data': data
+                })
+            else:
+                self.finished_signal.emit({
+                    'success': False,
+                    'symbol': self._symbol.upper(),
+                    'error': '无法获取技术分析数据'
+                })
+
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -2184,6 +2572,7 @@ class MainWindow(QMainWindow):
         self._news_tab = NewsTab()
         self._screener_tab = ScreenerTab()
         self._valuation_tab = ValuationTab()
+        self._technical_analysis_tab = TechnicalAnalysisTab()
         self._market_indicator_tab = MarketIndicatorTab()
         self._settings_tab = SettingsTab()
 
@@ -2191,6 +2580,7 @@ class MainWindow(QMainWindow):
         self._tab_widget.addTab(self._news_tab, "资讯")
         self._tab_widget.addTab(self._screener_tab, "选股工具")
         self._tab_widget.addTab(self._valuation_tab, "估值分析")
+        self._tab_widget.addTab(self._technical_analysis_tab, "技术分析")
         self._tab_widget.addTab(self._market_indicator_tab, "市场指标")
         self._tab_widget.addTab(self._settings_tab, "设置")
 
@@ -2247,12 +2637,16 @@ class MainWindow(QMainWindow):
         valuation_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(3))
         view_menu.addAction(valuation_action)
 
+        technical_analysis_action = QAction("技术分析(&T)", self)
+        technical_analysis_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(4))
+        view_menu.addAction(technical_analysis_action)
+
         market_indicator_action = QAction("市场指标(&M)", self)
-        market_indicator_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(4))
+        market_indicator_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(5))
         view_menu.addAction(market_indicator_action)
 
-        settings_action = QAction("设置(&T)", self)
-        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(5))
+        settings_action = QAction("设置(&S)", self)
+        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(6))
         view_menu.addAction(settings_action)
 
         help_menu = menubar.addMenu("帮助(&H)")
@@ -2281,8 +2675,10 @@ class MainWindow(QMainWindow):
         elif index == 3:
             self._status_bar.showMessage("估值分析页面")
         elif index == 4:
-            self._status_bar.showMessage("市场指标页面")
+            self._status_bar.showMessage("技术分析页面")
         elif index == 5:
+            self._status_bar.showMessage("市场指标页面")
+        elif index == 6:
             self._status_bar.showMessage("设置页面")
 
     def _refresh_current_tab(self):
@@ -2296,8 +2692,10 @@ class MainWindow(QMainWindow):
         elif current_index == 3:
             self._valuation_tab.refresh()
         elif current_index == 4:
-            self._market_indicator_tab.refresh()
+            self._technical_analysis_tab.refresh()
         elif current_index == 5:
+            self._market_indicator_tab.refresh()
+        elif current_index == 6:
             self._settings_tab.refresh()
 
         self._status_bar.showMessage(f"手动刷新于 {datetime.now().strftime('%H:%M:%S')}")
@@ -2320,7 +2718,8 @@ class MainWindow(QMainWindow):
             "- 实时行情监控\n"
             "- 新闻资讯获取\n"
             "- 智能选股工具\n"
-            "- 估值分析功能"
+            "- 估值分析功能\n"
+            "- 技术分析功能"
         )
 
     def closeEvent(self, event):
