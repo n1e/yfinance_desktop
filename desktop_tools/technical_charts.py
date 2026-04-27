@@ -89,14 +89,14 @@ class PriceChartWidget(QWidget):
         painter.setPen(QPen(self.COLOR_LIGHT_GRAY, 1, Qt.SolidLine))
 
         for i in range(levels + 1):
-            y = rect.top() + rect.height() * i / levels
-            painter.drawLine(rect.left(), y, rect.right(), y)
+            y = int(rect.top() + rect.height() * i / levels)
+            painter.drawLine(int(rect.left()), y, int(rect.right()), y)
 
             value = y_max - (y_max - y_min) * i / levels
             painter.setFont(QFont('Microsoft YaHei', 8))
             painter.setPen(QPen(self.COLOR_GRAY, 1))
             painter.drawText(
-                rect.left() - 55, y - 6, 50, 12,
+                int(rect.left() - 55), int(y - 6), 50, 12,
                 Qt.AlignRight | Qt.AlignVCenter,
                 f'{value:.2f}'
             )
@@ -107,7 +107,6 @@ class PriceChartWidget(QWidget):
         opens = price_data.get('open', [])
         highs = price_data.get('high', [])
         lows = price_data.get('low', [])
-        volumes = price_data.get('volume', [])
         
         ma = self._data.get('ma', {})
 
@@ -131,7 +130,7 @@ class PriceChartWidget(QWidget):
         x_step = rect.width() / (points - 1) if points > 1 else rect.width()
 
         for i in range(points):
-            x = rect.left() + i * x_step
+            x = int(rect.left() + i * x_step)
             
             if opens and highs and lows and closes and i < len(opens) and i < len(highs) and i < len(lows):
                 open_val = opens[i]
@@ -142,24 +141,24 @@ class PriceChartWidget(QWidget):
                 if all(v is not None for v in [open_val, high_val, low_val, close_val]):
                     color = self.COLOR_GREEN if close_val >= open_val else self.COLOR_RED
                     
-                    high_y = rect.bottom() - (high_val - y_min) / (y_max - y_min) * rect.height()
-                    low_y = rect.bottom() - (low_val - y_min) / (y_max - y_min) * rect.height()
-                    open_y = rect.bottom() - (open_val - y_min) / (y_max - y_min) * rect.height()
-                    close_y = rect.bottom() - (close_val - y_min) / (y_max - y_min) * rect.height()
+                    high_y = int(rect.bottom() - (high_val - y_min) / (y_max - y_min) * rect.height())
+                    low_y = int(rect.bottom() - (low_val - y_min) / (y_max - y_min) * rect.height())
+                    open_y = int(rect.bottom() - (open_val - y_min) / (y_max - y_min) * rect.height())
+                    close_y = int(rect.bottom() - (close_val - y_min) / (y_max - y_min) * rect.height())
 
                     painter.setPen(QPen(color, 1))
                     painter.drawLine(x, high_y, x, low_y)
 
-                    candle_width = max(2, x_step * 0.6)
+                    candle_width = int(max(2, x_step * 0.6))
                     painter.setBrush(QBrush(color))
                     painter.setPen(Qt.NoPen)
                     
                     top_y = min(open_y, close_y)
                     bottom_y = max(open_y, close_y)
-                    candle_height = max(1, bottom_y - top_y)
+                    candle_height = int(max(1, bottom_y - top_y))
                     
                     painter.drawRect(
-                        x - candle_width / 2,
+                        int(x - candle_width / 2),
                         top_y,
                         candle_width,
                         candle_height
@@ -185,10 +184,10 @@ class PriceChartWidget(QWidget):
                     if first_valid is None:
                         first_valid = i
                     else:
-                        x1 = rect.left() + first_valid * x_step
-                        y1 = rect.bottom() - (ma_values[first_valid] - y_min) / (y_max - y_min) * rect.height()
-                        x2 = rect.left() + i * x_step
-                        y2 = rect.bottom() - (ma_values[i] - y_min) / (y_max - y_min) * rect.height()
+                        x1 = int(rect.left() + first_valid * x_step)
+                        y1 = int(rect.bottom() - (ma_values[first_valid] - y_min) / (y_max - y_min) * rect.height())
+                        x2 = int(rect.left() + i * x_step)
+                        y2 = int(rect.bottom() - (ma_values[i] - y_min) / (y_max - y_min) * rect.height())
                         
                         painter.drawLine(x1, y1, x2, y2)
                         first_valid = i
@@ -199,9 +198,9 @@ class PriceChartWidget(QWidget):
             if period in ma and ma[period]:
                 painter.setPen(QPen(color, 1))
                 painter.setBrush(QBrush(color))
-                painter.drawRect(rect.left() + legend_y, 5, 20, 3)
+                painter.drawRect(int(rect.left() + legend_y), 5, 20, 3)
                 painter.setPen(QPen(self.COLOR_GRAY, 1))
-                painter.drawText(rect.left() + legend_y + 25, 15, f'MA{period}')
+                painter.drawText(int(rect.left() + legend_y + 25), 15, f'MA{period}')
                 legend_y += 60
 
     def _draw_macd_chart(self, painter: QPainter, rect: QRectF):
@@ -227,9 +226,9 @@ class PriceChartWidget(QWidget):
 
         self._draw_grid(painter, rect, y_min, y_max)
 
-        zero_y = rect.bottom() - (0 - y_min) / (y_max - y_min) * rect.height()
+        zero_y = int(rect.bottom() - (0 - y_min) / (y_max - y_min) * rect.height())
         painter.setPen(QPen(self.COLOR_GRAY, 1, Qt.DashLine))
-        painter.drawLine(rect.left(), zero_y, rect.right(), zero_y)
+        painter.drawLine(int(rect.left()), zero_y, int(rect.right()), zero_y)
 
         points = len(macd_line)
         if points < 2:
@@ -241,28 +240,28 @@ class PriceChartWidget(QWidget):
             if histogram[i] is None or math.isnan(histogram[i]):
                 continue
 
-            x = rect.left() + i * x_step
+            x = int(rect.left() + i * x_step)
             value = histogram[i]
             
             color = self.COLOR_GREEN if value >= 0 else self.COLOR_RED
             
-            bar_y = rect.bottom() - (value - y_min) / (y_max - y_min) * rect.height()
-            bar_height = abs(bar_y - zero_y)
-            bar_width = max(2, x_step * 0.6)
+            bar_y = int(rect.bottom() - (value - y_min) / (y_max - y_min) * rect.height())
+            bar_height = int(abs(bar_y - zero_y))
+            bar_width = int(max(2, x_step * 0.6))
 
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(color))
             
             if value >= 0:
                 painter.drawRect(
-                    x - bar_width / 2,
+                    int(x - bar_width / 2),
                     bar_y,
                     bar_width,
                     bar_height
                 )
             else:
                 painter.drawRect(
-                    x - bar_width / 2,
+                    int(x - bar_width / 2),
                     zero_y,
                     bar_width,
                     bar_height
@@ -283,10 +282,10 @@ class PriceChartWidget(QWidget):
                     if first_valid is None:
                         first_valid = i
                     else:
-                        x1 = rect.left() + first_valid * x_step
-                        y1 = rect.bottom() - (line_data[first_valid] - y_min) / (y_max - y_min) * rect.height()
-                        x2 = rect.left() + i * x_step
-                        y2 = rect.bottom() - (line_data[i] - y_min) / (y_max - y_min) * rect.height()
+                        x1 = int(rect.left() + first_valid * x_step)
+                        y1 = int(rect.bottom() - (line_data[first_valid] - y_min) / (y_max - y_min) * rect.height())
+                        x2 = int(rect.left() + i * x_step)
+                        y2 = int(rect.bottom() - (line_data[i] - y_min) / (y_max - y_min) * rect.height())
                         
                         painter.drawLine(x1, y1, x2, y2)
                         first_valid = i
@@ -294,20 +293,20 @@ class PriceChartWidget(QWidget):
         painter.setFont(QFont('Microsoft YaHei', 8))
         painter.setPen(QPen(self.COLOR_BLUE, 1))
         painter.setBrush(QBrush(self.COLOR_BLUE))
-        painter.drawRect(rect.left(), 5, 20, 3)
+        painter.drawRect(int(rect.left()), 5, 20, 3)
         painter.setPen(QPen(self.COLOR_GRAY, 1))
-        painter.drawText(rect.left() + 25, 15, 'MACD')
+        painter.drawText(int(rect.left() + 25), 15, 'MACD')
 
         painter.setPen(QPen(self.COLOR_ORANGE, 1))
         painter.setBrush(QBrush(self.COLOR_ORANGE))
-        painter.drawRect(rect.left() + 70, 5, 20, 3)
+        painter.drawRect(int(rect.left() + 70), 5, 20, 3)
         painter.setPen(QPen(self.COLOR_GRAY, 1))
-        painter.drawText(rect.left() + 95, 15, 'Signal')
+        painter.drawText(int(rect.left() + 95), 15, 'Signal')
 
         painter.setBrush(QBrush(self.COLOR_GREEN))
-        painter.drawRect(rect.left() + 140, 5, 20, 3)
+        painter.drawRect(int(rect.left() + 140), 5, 20, 3)
         painter.setPen(QPen(self.COLOR_GRAY, 1))
-        painter.drawText(rect.left() + 165, 15, 'Histogram')
+        painter.drawText(int(rect.left() + 165), 15, 'Histogram')
 
     def _draw_rsi_chart(self, painter: QPainter, rect: QRectF):
         rsi = self._data.get('rsi', [])
@@ -318,18 +317,18 @@ class PriceChartWidget(QWidget):
         y_min, y_max = 0, 100
         self._draw_grid(painter, rect, y_min, y_max)
 
-        overbought_y = rect.bottom() - (70 - y_min) / (y_max - y_min) * rect.height()
-        oversold_y = rect.bottom() - (30 - y_min) / (y_max - y_min) * rect.height()
-        middle_y = rect.bottom() - (50 - y_min) / (y_max - y_min) * rect.height()
+        overbought_y = int(rect.bottom() - (70 - y_min) / (y_max - y_min) * rect.height())
+        oversold_y = int(rect.bottom() - (30 - y_min) / (y_max - y_min) * rect.height())
+        middle_y = int(rect.bottom() - (50 - y_min) / (y_max - y_min) * rect.height())
 
         painter.setPen(QPen(self.COLOR_RED, 1, Qt.DashLine))
-        painter.drawLine(rect.left(), overbought_y, rect.right(), overbought_y)
+        painter.drawLine(int(rect.left()), overbought_y, int(rect.right()), overbought_y)
         
         painter.setPen(QPen(self.COLOR_GREEN, 1, Qt.DashLine))
-        painter.drawLine(rect.left(), oversold_y, rect.right(), oversold_y)
+        painter.drawLine(int(rect.left()), oversold_y, int(rect.right()), oversold_y)
         
         painter.setPen(QPen(self.COLOR_GRAY, 1, Qt.DashLine))
-        painter.drawLine(rect.left(), middle_y, rect.right(), middle_y)
+        painter.drawLine(int(rect.left()), middle_y, int(rect.right()), middle_y)
 
         points = len(rsi)
         if points < 2:
@@ -345,20 +344,20 @@ class PriceChartWidget(QWidget):
                 if first_valid is None:
                     first_valid = i
                 else:
-                    x1 = rect.left() + first_valid * x_step
-                    y1 = rect.bottom() - (rsi[first_valid] - y_min) / (y_max - y_min) * rect.height()
-                    x2 = rect.left() + i * x_step
-                    y2 = rect.bottom() - (rsi[i] - y_min) / (y_max - y_min) * rect.height()
+                    x1 = int(rect.left() + first_valid * x_step)
+                    y1 = int(rect.bottom() - (rsi[first_valid] - y_min) / (y_max - y_min) * rect.height())
+                    x2 = int(rect.left() + i * x_step)
+                    y2 = int(rect.bottom() - (rsi[i] - y_min) / (y_max - y_min) * rect.height())
                     
                     painter.drawLine(x1, y1, x2, y2)
                     first_valid = i
 
         painter.setFont(QFont('Microsoft YaHei', 8))
         painter.setPen(QPen(self.COLOR_RED, 1))
-        painter.drawText(rect.left(), int(overbought_y) - 5, '超买 70')
+        painter.drawText(int(rect.left()), int(overbought_y) - 5, '超买 70')
         
         painter.setPen(QPen(self.COLOR_GREEN, 1))
-        painter.drawText(rect.left(), int(oversold_y) + 12, '超卖 30')
+        painter.drawText(int(rect.left()), int(oversold_y) + 12, '超卖 30')
 
     def _draw_bollinger_chart(self, painter: QPainter, rect: QRectF):
         price_data = self._data.get('price_data', {})
@@ -425,10 +424,10 @@ class PriceChartWidget(QWidget):
                     if first_valid is None:
                         first_valid = i
                     else:
-                        x1 = rect.left() + first_valid * x_step
-                        y1 = rect.bottom() - (line_data[first_valid] - y_min) / (y_max - y_min) * rect.height()
-                        x2 = rect.left() + i * x_step
-                        y2 = rect.bottom() - (line_data[i] - y_min) / (y_max - y_min) * rect.height()
+                        x1 = int(rect.left() + first_valid * x_step)
+                        y1 = int(rect.bottom() - (line_data[first_valid] - y_min) / (y_max - y_min) * rect.height())
+                        x2 = int(rect.left() + i * x_step)
+                        y2 = int(rect.bottom() - (line_data[i] - y_min) / (y_max - y_min) * rect.height())
                         
                         painter.drawLine(x1, y1, x2, y2)
                         first_valid = i
@@ -436,12 +435,12 @@ class PriceChartWidget(QWidget):
         painter.setPen(QPen(self.COLOR_ORANGE, 1))
         for i in range(len(closes)):
             if closes[i] is not None:
-                x = rect.left() + i * x_step
-                y = rect.bottom() - (closes[i] - y_min) / (y_max - y_min) * rect.height()
+                x = int(rect.left() + i * x_step)
+                y = int(rect.bottom() - (closes[i] - y_min) / (y_max - y_min) * rect.height())
                 painter.drawEllipse(x - 2, y - 2, 4, 4)
 
         painter.setFont(QFont('Microsoft YaHei', 8))
-        legend_x = rect.left()
+        legend_x = int(rect.left())
         for color, label in [
             (self.COLOR_RED, '上轨'),
             (self.COLOR_BLUE, '中轨'),
@@ -477,14 +476,14 @@ class PriceChartWidget(QWidget):
 
         self._draw_grid(painter, rect, y_min, y_max)
 
-        overbought_y = rect.bottom() - (80 - y_min) / (y_max - y_min) * rect.height()
-        oversold_y = rect.bottom() - (20 - y_min) / (y_max - y_min) * rect.height()
+        overbought_y = int(rect.bottom() - (80 - y_min) / (y_max - y_min) * rect.height())
+        oversold_y = int(rect.bottom() - (20 - y_min) / (y_max - y_min) * rect.height())
 
         painter.setPen(QPen(self.COLOR_RED, 1, Qt.DashLine))
-        painter.drawLine(rect.left(), overbought_y, rect.right(), overbought_y)
+        painter.drawLine(int(rect.left()), overbought_y, int(rect.right()), overbought_y)
         
         painter.setPen(QPen(self.COLOR_GREEN, 1, Qt.DashLine))
-        painter.drawLine(rect.left(), oversold_y, rect.right(), oversold_y)
+        painter.drawLine(int(rect.left()), oversold_y, int(rect.right()), oversold_y)
 
         points = len(k)
         if points < 2:
@@ -508,16 +507,16 @@ class PriceChartWidget(QWidget):
                     if first_valid is None:
                         first_valid = i
                     else:
-                        x1 = rect.left() + first_valid * x_step
-                        y1 = rect.bottom() - (line_data[first_valid] - y_min) / (y_max - y_min) * rect.height()
-                        x2 = rect.left() + i * x_step
-                        y2 = rect.bottom() - (line_data[i] - y_min) / (y_max - y_min) * rect.height()
+                        x1 = int(rect.left() + first_valid * x_step)
+                        y1 = int(rect.bottom() - (line_data[first_valid] - y_min) / (y_max - y_min) * rect.height())
+                        x2 = int(rect.left() + i * x_step)
+                        y2 = int(rect.bottom() - (line_data[i] - y_min) / (y_max - y_min) * rect.height())
                         
                         painter.drawLine(x1, y1, x2, y2)
                         first_valid = i
 
         painter.setFont(QFont('Microsoft YaHei', 8))
-        legend_x = rect.left()
+        legend_x = int(rect.left())
         for color, label in [
             (self.COLOR_BLUE, 'K'),
             (self.COLOR_ORANGE, 'D'),
@@ -531,10 +530,10 @@ class PriceChartWidget(QWidget):
             legend_x += 40
 
         painter.setPen(QPen(self.COLOR_RED, 1))
-        painter.drawText(rect.left(), int(overbought_y) - 5, '超买 80')
+        painter.drawText(int(rect.left()), int(overbought_y) - 5, '超买 80')
         
         painter.setPen(QPen(self.COLOR_GREEN, 1))
-        painter.drawText(rect.left(), int(oversold_y) + 12, '超卖 20')
+        painter.drawText(int(rect.left()), int(oversold_y) + 12, '超卖 20')
 
     def _draw_volume_chart(self, painter: QPainter, rect: QRectF):
         price_data = self._data.get('price_data', {})
@@ -570,7 +569,7 @@ class PriceChartWidget(QWidget):
             if volumes[i] is None:
                 continue
 
-            x = rect.left() + i * x_step + x_step * 0.1
+            x = int(rect.left() + i * x_step + x_step * 0.1)
             value = volumes[i]
             
             if closes and opens and i < len(closes) and i < len(opens):
@@ -578,14 +577,14 @@ class PriceChartWidget(QWidget):
             else:
                 color = self.COLOR_GRAY
             
-            bar_height = (value - y_min) / (y_max - y_min) * rect.height()
-            bar_width = x_step * 0.8
+            bar_height = int((value - y_min) / (y_max - y_min) * rect.height())
+            bar_width = int(x_step * 0.8)
 
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(color))
             painter.drawRect(
                 x,
-                rect.bottom() - bar_height,
+                int(rect.bottom() - bar_height),
                 bar_width,
                 bar_height
             )
@@ -605,16 +604,16 @@ class PriceChartWidget(QWidget):
                     if first_valid is None:
                         first_valid = i
                     else:
-                        x1 = rect.left() + first_valid * x_step + x_step / 2
-                        y1 = rect.bottom() - (line_data[first_valid] - y_min) / (y_max - y_min) * rect.height()
-                        x2 = rect.left() + i * x_step + x_step / 2
-                        y2 = rect.bottom() - (line_data[i] - y_min) / (y_max - y_min) * rect.height()
+                        x1 = int(rect.left() + first_valid * x_step + x_step / 2)
+                        y1 = int(rect.bottom() - (line_data[first_valid] - y_min) / (y_max - y_min) * rect.height())
+                        x2 = int(rect.left() + i * x_step + x_step / 2)
+                        y2 = int(rect.bottom() - (line_data[i] - y_min) / (y_max - y_min) * rect.height())
                         
                         painter.drawLine(x1, y1, x2, y2)
                         first_valid = i
 
         painter.setFont(QFont('Microsoft YaHei', 8))
-        legend_x = rect.left()
+        legend_x = int(rect.left())
         for color, label in [
             (self.COLOR_BLUE, 'MA5'),
             (self.COLOR_ORANGE, 'MA20')
