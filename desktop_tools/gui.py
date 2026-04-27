@@ -24,6 +24,21 @@ from .technical_analyzer import TechnicalAnalyzer
 from .technical_charts import PriceChartWidget, SignalDisplayWidget
 
 
+class NumericTableWidgetItem(QTableWidgetItem):
+    def __init__(self, text: str = '', value: float = 0.0):
+        super().__init__(text)
+        self._value = value
+
+    def __lt__(self, other):
+        if isinstance(other, NumericTableWidgetItem):
+            return self._value < other._value
+        return super().__lt__(other)
+
+    @property
+    def value(self) -> float:
+        return self._value
+
+
 class ValuationTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,6 +49,7 @@ class ValuationTab(QWidget):
         self._current_metrics = None
         self._init_ui()
         self._load_watchlist()
+        self._watchlist_manager.add_update_callback(self._load_watchlist)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -682,20 +698,6 @@ class WatchlistTab(QWidget):
         self._refresh_btn = QPushButton("刷新数据")
         control_layout.addWidget(self._refresh_btn)
 
-        control_layout.addSpacing(20)
-
-        control_layout.addWidget(QLabel("排序:"))
-        self._sort_combo = QComboBox()
-        self._sort_combo.addItems([
-            "股票代码", "名称", "当前价格", "涨跌幅",
-            "成交量", "市值", "持仓数量", "盈亏金额", "盈亏百分比", "持仓市值"
-        ])
-        control_layout.addWidget(self._sort_combo)
-
-        self._sort_order_check = QCheckBox("降序")
-        self._sort_order_check.setChecked(False)
-        control_layout.addWidget(self._sort_order_check)
-
         control_layout.addStretch()
 
         layout.addWidget(control_group)
@@ -768,6 +770,7 @@ class WatchlistTab(QWidget):
         self._table.setAlternatingRowColors(True)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._table.setSortingEnabled(True)
 
         layout.addWidget(self._table)
 
@@ -776,8 +779,6 @@ class WatchlistTab(QWidget):
         self._symbol_input.returnPressed.connect(self._add_stock)
         self._remove_btn.clicked.connect(self._remove_selected)
         self._refresh_btn.clicked.connect(self._refresh_data)
-        self._sort_combo.currentIndexChanged.connect(self._sort_table)
-        self._sort_order_check.stateChanged.connect(self._sort_table)
         self._watchlist_manager.add_update_callback(self._on_data_updated)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -828,23 +829,9 @@ class WatchlistTab(QWidget):
         self._update_stats()
 
     def _update_table(self):
-        sort_field_map = {
-            "股票代码": "symbol",
-            "名称": "name",
-            "当前价格": "current_price",
-            "涨跌幅": "change_percent",
-            "成交量": "volume",
-            "市值": "market_cap",
-            "持仓数量": "quantity",
-            "盈亏金额": "pnl_amount",
-            "盈亏百分比": "pnl_percent",
-            "持仓市值": "current_value"
-        }
-        sort_by = sort_field_map.get(self._sort_combo.currentText(), "symbol")
-        ascending = not self._sort_order_check.isChecked()
+        quotes = self._watchlist_manager.get_sorted_quotes()
 
-        quotes = self._watchlist_manager.get_sorted_quotes(sort_by=sort_by, ascending=ascending)
-
+        self._table.setSortingEnabled(False)
         self._table.setRowCount(len(quotes))
 
         green_color = QColor(34, 197, 94)
@@ -856,14 +843,18 @@ class WatchlistTab(QWidget):
             self._table.setItem(row, 1, QTableWidgetItem(quote.get('name', '')))
 
             current_price = quote.get('current_price', 0)
-            current_item = QTableWidgetItem(f"{current_price:.2f}" if current_price else "--")
+            current_text = f"{current_price:.2f}" if current_price else "--"
+            current_item = NumericTableWidgetItem(current_text, current_price if current_price else float('-inf'))
             self._table.setItem(row, 2, current_item)
 
             change = quote.get('change', 0)
             change_pct = quote.get('change_percent', 0)
 
-            change_item = QTableWidgetItem(f"{change:+.2f}" if change else "--")
-            change_pct_item = QTableWidgetItem(f"{change_pct:+.2f}%" if change_pct else "--")
+            change_text = f"{change:+.2f}" if change else "--"
+            change_item = NumericTableWidgetItem(change_text, change if change else float('-inf'))
+            
+            change_pct_text = f"{change_pct:+.2f}%" if change_pct else "--"
+            change_pct_item = NumericTableWidgetItem(change_pct_text, change_pct if change_pct else float('-inf'))
 
             if change_pct > 0:
                 change_color = green_color
@@ -888,11 +879,20 @@ class WatchlistTab(QWidget):
             pnl_amount = pnl.get('pnl_amount', 0)
             pnl_percent = pnl.get('pnl_percent', 0)
 
-            quantity_item = QTableWidgetItem(f"{quantity}" if quantity > 0 else "--")
-            cost_price_item = QTableWidgetItem(f"${cost_price:.2f}" if cost_price > 0 else "--")
-            current_value_item = QTableWidgetItem(f"${current_value:,.2f}" if current_value > 0 else "--")
-            pnl_amount_item = QTableWidgetItem(f"${pnl_amount:+,.2f}" if quantity > 0 else "--")
-            pnl_percent_item = QTableWidgetItem(f"{pnl_percent:+.2f}%" if quantity > 0 else "--")
+            quantity_text = f"{quantity}" if quantity > 0 else "--"
+            quantity_item = NumericTableWidgetItem(quantity_text, quantity if quantity > 0 else float('-inf'))
+            
+            cost_price_text = f"${cost_price:.2f}" if cost_price > 0 else "--"
+            cost_price_item = NumericTableWidgetItem(cost_price_text, cost_price if cost_price > 0 else float('-inf'))
+            
+            current_value_text = f"${current_value:,.2f}" if current_value > 0 else "--"
+            current_value_item = NumericTableWidgetItem(current_value_text, current_value if current_value > 0 else float('-inf'))
+            
+            pnl_amount_text = f"${pnl_amount:+,.2f}" if quantity > 0 else "--"
+            pnl_amount_item = NumericTableWidgetItem(pnl_amount_text, pnl_amount if quantity > 0 else float('-inf'))
+            
+            pnl_percent_text = f"{pnl_percent:+.2f}%" if quantity > 0 else "--"
+            pnl_percent_item = NumericTableWidgetItem(pnl_percent_text, pnl_percent if quantity > 0 else float('-inf'))
 
             if quantity > 0 and current_value > 0:
                 if pnl_amount > 0:
@@ -918,12 +918,24 @@ class WatchlistTab(QWidget):
             volume = quote.get('volume', 0)
             market_cap = quote.get('market_cap', 0)
 
-            self._table.setItem(row, 10, QTableWidgetItem(f"{open_price:.2f}" if open_price else "--"))
-            self._table.setItem(row, 11, QTableWidgetItem(f"{high:.2f}" if high else "--"))
-            self._table.setItem(row, 12, QTableWidgetItem(f"{low:.2f}" if low else "--"))
-            self._table.setItem(row, 13, QTableWidgetItem(self._format_number(volume)))
-            self._table.setItem(row, 14, QTableWidgetItem(self._format_market_cap(market_cap)))
+            open_text = f"{open_price:.2f}" if open_price else "--"
+            self._table.setItem(row, 10, NumericTableWidgetItem(open_text, open_price if open_price else float('-inf')))
+            
+            high_text = f"{high:.2f}" if high else "--"
+            self._table.setItem(row, 11, NumericTableWidgetItem(high_text, high if high else float('-inf')))
+            
+            low_text = f"{low:.2f}" if low else "--"
+            self._table.setItem(row, 12, NumericTableWidgetItem(low_text, low if low else float('-inf')))
+            
+            volume_text = self._format_number(volume)
+            self._table.setItem(row, 13, NumericTableWidgetItem(volume_text, volume if volume else float('-inf')))
+            
+            market_cap_text = self._format_market_cap(market_cap)
+            self._table.setItem(row, 14, NumericTableWidgetItem(market_cap_text, market_cap if market_cap else float('-inf')))
+            
             self._table.setItem(row, 15, QTableWidgetItem(quote.get('currency', '')))
+
+        self._table.setSortingEnabled(True)
 
     def _update_stats(self):
         stats = self._watchlist_manager.get_total_value()
@@ -960,9 +972,6 @@ class WatchlistTab(QWidget):
         last_update = self._watchlist_manager.last_update
         if last_update:
             self._last_update_label.setText(f"最后更新: {last_update.strftime('%H:%M:%S')}")
-
-    def _sort_table(self):
-        self._update_table()
 
     def _format_number(self, num: float) -> str:
         if num >= 1_000_000:
@@ -1402,6 +1411,7 @@ class ScreenerTab(QWidget):
         self._result_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._result_table.setAlternatingRowColors(True)
         self._result_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._result_table.setSortingEnabled(True)
 
         layout.addWidget(self._result_table)
 
@@ -1599,6 +1609,7 @@ class ScreenerTab(QWidget):
         self._add_to_watchlist_btn.setEnabled(len(results) > 0)
 
     def _display_rec_results(self, results: List[Dict[str, Any]]):
+        self._result_table.setSortingEnabled(False)
         self._result_table.clear()
         self._result_table.setColumnCount(11)
         self._result_table.setHorizontalHeaderLabels([
@@ -1611,18 +1622,34 @@ class ScreenerTab(QWidget):
         for row, item in enumerate(results):
             self._result_table.setItem(row, 0, QTableWidgetItem(item.get('symbol', '')))
             self._result_table.setItem(row, 1, QTableWidgetItem(item.get('name', '')))
-            self._result_table.setItem(row, 2, QTableWidgetItem(str(item.get('strongBuy', 0))))
-            self._result_table.setItem(row, 3, QTableWidgetItem(str(item.get('buy', 0))))
-            self._result_table.setItem(row, 4, QTableWidgetItem(str(item.get('hold', 0))))
-            self._result_table.setItem(row, 5, QTableWidgetItem(str(item.get('sell', 0))))
-            self._result_table.setItem(row, 6, QTableWidgetItem(str(item.get('strongSell', 0))))
-            self._result_table.setItem(row, 7, QTableWidgetItem(f"{item.get('buy_ratio', 0):.1f}%"))
+            
+            strongBuy = item.get('strongBuy', 0)
+            self._result_table.setItem(row, 2, NumericTableWidgetItem(str(strongBuy), strongBuy))
+            
+            buy = item.get('buy', 0)
+            self._result_table.setItem(row, 3, NumericTableWidgetItem(str(buy), buy))
+            
+            hold = item.get('hold', 0)
+            self._result_table.setItem(row, 4, NumericTableWidgetItem(str(hold), hold))
+            
+            sell = item.get('sell', 0)
+            self._result_table.setItem(row, 5, NumericTableWidgetItem(str(sell), sell))
+            
+            strongSell = item.get('strongSell', 0)
+            self._result_table.setItem(row, 6, NumericTableWidgetItem(str(strongSell), strongSell))
+            
+            buy_ratio = item.get('buy_ratio', 0)
+            buy_ratio_item = NumericTableWidgetItem(f"{buy_ratio:.1f}%", buy_ratio)
+            self._result_table.setItem(row, 7, buy_ratio_item)
 
             current_price = item.get('current_price', 0)
             change_pct = item.get('change_percent', 0)
 
-            price_item = QTableWidgetItem(f"{current_price:.2f}" if current_price else "--")
-            change_item = QTableWidgetItem(f"{change_pct:+.2f}%" if change_pct else "--")
+            price_text = f"{current_price:.2f}" if current_price else "--"
+            price_item = NumericTableWidgetItem(price_text, current_price if current_price else float('-inf'))
+            
+            change_text = f"{change_pct:+.2f}%" if change_pct else "--"
+            change_item = NumericTableWidgetItem(change_text, change_pct if change_pct else float('-inf'))
 
             if change_pct > 0:
                 color = QColor(0, 150, 0)
@@ -1642,8 +1669,11 @@ class ScreenerTab(QWidget):
             if in_watchlist:
                 watchlist_item.setForeground(QColor(0, 150, 0))
             self._result_table.setItem(row, 10, watchlist_item)
+        
+        self._result_table.setSortingEnabled(True)
 
     def _display_target_results(self, results: List[Dict[str, Any]]):
+        self._result_table.setSortingEnabled(False)
         self._result_table.clear()
         self._result_table.setColumnCount(9)
         self._result_table.setHorizontalHeaderLabels([
@@ -1660,8 +1690,11 @@ class ScreenerTab(QWidget):
             current_price = item.get('current_price', 0)
             change_pct = item.get('change_percent', 0)
 
-            price_item = QTableWidgetItem(f"{current_price:.2f}" if current_price else "--")
-            change_item = QTableWidgetItem(f"{change_pct:+.2f}%" if change_pct else "--")
+            price_text = f"{current_price:.2f}" if current_price else "--"
+            price_item = NumericTableWidgetItem(price_text, current_price if current_price else float('-inf'))
+            
+            change_text = f"{change_pct:+.2f}%" if change_pct else "--"
+            change_item = NumericTableWidgetItem(change_text, change_pct if change_pct else float('-inf'))
 
             if change_pct > 0:
                 color = QColor(0, 150, 0)
@@ -1674,15 +1707,25 @@ class ScreenerTab(QWidget):
             change_item.setForeground(color)
 
             self._result_table.setItem(row, 2, price_item)
-            self._result_table.setItem(row, 3, QTableWidgetItem(f"{item.get('target_mean', 0):.2f}"))
+            
+            target_mean = item.get('target_mean', 0)
+            target_mean_text = f"{target_mean:.2f}" if target_mean else "--"
+            self._result_table.setItem(row, 3, NumericTableWidgetItem(target_mean_text, target_mean if target_mean else float('-inf')))
 
             upside = item.get('upside_potential', 0)
-            upside_item = QTableWidgetItem(f"{upside:+.2f}%")
+            upside_text = f"{upside:+.2f}%"
+            upside_item = NumericTableWidgetItem(upside_text, upside)
             upside_item.setForeground(QColor(0, 150, 0))
             self._result_table.setItem(row, 4, upside_item)
 
-            self._result_table.setItem(row, 5, QTableWidgetItem(f"{item.get('target_high', 0):.2f}"))
-            self._result_table.setItem(row, 6, QTableWidgetItem(f"{item.get('target_low', 0):.2f}"))
+            target_high = item.get('target_high', 0)
+            target_high_text = f"{target_high:.2f}" if target_high else "--"
+            self._result_table.setItem(row, 5, NumericTableWidgetItem(target_high_text, target_high if target_high else float('-inf')))
+            
+            target_low = item.get('target_low', 0)
+            target_low_text = f"{target_low:.2f}" if target_low else "--"
+            self._result_table.setItem(row, 6, NumericTableWidgetItem(target_low_text, target_low if target_low else float('-inf')))
+            
             self._result_table.setItem(row, 7, change_item)
 
             in_watchlist = self._watchlist_manager.is_in_watchlist(item.get('symbol', ''))
@@ -1690,8 +1733,11 @@ class ScreenerTab(QWidget):
             if in_watchlist:
                 watchlist_item.setForeground(QColor(0, 150, 0))
             self._result_table.setItem(row, 8, watchlist_item)
+        
+        self._result_table.setSortingEnabled(True)
 
     def _display_insider_results(self, results: List[Dict[str, Any]]):
+        self._result_table.setSortingEnabled(False)
         self._result_table.clear()
         self._result_table.setColumnCount(10)
         self._result_table.setHorizontalHeaderLabels([
@@ -1708,8 +1754,11 @@ class ScreenerTab(QWidget):
             current_price = item.get('current_price', 0)
             change_pct = item.get('change_percent', 0)
 
-            price_item = QTableWidgetItem(f"{current_price:.2f}" if current_price else "--")
-            change_item = QTableWidgetItem(f"{change_pct:+.2f}%" if change_pct else "--")
+            price_text = f"{current_price:.2f}" if current_price else "--"
+            price_item = NumericTableWidgetItem(price_text, current_price if current_price else float('-inf'))
+            
+            change_text = f"{change_pct:+.2f}%" if change_pct else "--"
+            change_item = NumericTableWidgetItem(change_text, change_pct if change_pct else float('-inf'))
 
             if change_pct > 0:
                 color = QColor(0, 150, 0)
@@ -1724,9 +1773,17 @@ class ScreenerTab(QWidget):
             self._result_table.setItem(row, 2, price_item)
             self._result_table.setItem(row, 3, change_item)
 
-            self._result_table.setItem(row, 4, QTableWidgetItem(str(item.get('transaction_count', 0))))
-            self._result_table.setItem(row, 5, QTableWidgetItem(self._format_number(item.get('total_shares', 0))))
-            self._result_table.setItem(row, 6, QTableWidgetItem(self._format_market_cap(item.get('total_value', 0))))
+            transaction_count = item.get('transaction_count', 0)
+            self._result_table.setItem(row, 4, NumericTableWidgetItem(str(transaction_count), transaction_count))
+            
+            total_shares = item.get('total_shares', 0)
+            total_shares_text = self._format_number(total_shares)
+            self._result_table.setItem(row, 5, NumericTableWidgetItem(total_shares_text, total_shares))
+            
+            total_value = item.get('total_value', 0)
+            total_value_text = self._format_market_cap(total_value)
+            self._result_table.setItem(row, 6, NumericTableWidgetItem(total_value_text, total_value))
+            
             self._result_table.setItem(row, 7, QTableWidgetItem(item.get('latest_date', '')))
             self._result_table.setItem(row, 8, QTableWidgetItem(item.get('latest_insider', '')))
 
@@ -1735,8 +1792,11 @@ class ScreenerTab(QWidget):
             if in_watchlist:
                 watchlist_item.setForeground(QColor(0, 150, 0))
             self._result_table.setItem(row, 9, watchlist_item)
+        
+        self._result_table.setSortingEnabled(True)
 
     def _display_piotroski_results(self, results: List[Dict[str, Any]]):
+        self._result_table.setSortingEnabled(False)
         self._result_table.clear()
         self._result_table.setColumnCount(12)
         self._result_table.setHorizontalHeaderLabels([
@@ -1752,7 +1812,7 @@ class ScreenerTab(QWidget):
             self._result_table.setItem(row, 1, QTableWidgetItem(item.get('name', '')))
 
             fscore_total = item.get('fscore_total', 0)
-            fscore_item = QTableWidgetItem(str(fscore_total))
+            fscore_item = NumericTableWidgetItem(str(fscore_total), fscore_total)
             if fscore_total >= 8:
                 fscore_item.setForeground(QColor(0, 150, 0))
             elif fscore_total >= 6:
@@ -1763,7 +1823,8 @@ class ScreenerTab(QWidget):
 
             current_roa = item.get('current_roa', None)
             if current_roa is not None:
-                roa_item = QTableWidgetItem(f"{current_roa*100:.2f}%")
+                roa_text = f"{current_roa*100:.2f}%"
+                roa_item = NumericTableWidgetItem(roa_text, current_roa)
                 if current_roa > 0:
                     roa_item.setForeground(QColor(0, 150, 0))
                 else:
@@ -1774,7 +1835,8 @@ class ScreenerTab(QWidget):
 
             current_cfo = item.get('current_cfo', None)
             if current_cfo is not None:
-                self._result_table.setItem(row, 4, QTableWidgetItem(self._format_market_cap(current_cfo)))
+                cfo_text = self._format_market_cap(current_cfo)
+                self._result_table.setItem(row, 4, NumericTableWidgetItem(cfo_text, current_cfo))
             else:
                 self._result_table.setItem(row, 4, QTableWidgetItem("--"))
 
@@ -1813,8 +1875,11 @@ class ScreenerTab(QWidget):
             current_price = item.get('current_price', 0)
             change_pct = item.get('change_percent', 0)
 
-            price_item = QTableWidgetItem(f"{current_price:.2f}" if current_price else "--")
-            change_item = QTableWidgetItem(f"{change_pct:+.2f}%" if change_pct else "--")
+            price_text = f"{current_price:.2f}" if current_price else "--"
+            price_item = NumericTableWidgetItem(price_text, current_price if current_price else float('-inf'))
+            
+            change_text = f"{change_pct:+.2f}%" if change_pct else "--"
+            change_item = NumericTableWidgetItem(change_text, change_pct if change_pct else float('-inf'))
 
             if change_pct > 0:
                 color = QColor(0, 150, 0)
@@ -1834,8 +1899,11 @@ class ScreenerTab(QWidget):
             if in_watchlist:
                 watchlist_item.setForeground(QColor(0, 150, 0))
             self._result_table.setItem(row, 11, watchlist_item)
+        
+        self._result_table.setSortingEnabled(True)
 
     def _display_altman_zscore_results(self, results: List[Dict[str, Any]]):
+        self._result_table.setSortingEnabled(False)
         self._result_table.clear()
         self._result_table.setColumnCount(12)
         self._result_table.setHorizontalHeaderLabels([
@@ -1851,7 +1919,7 @@ class ScreenerTab(QWidget):
             self._result_table.setItem(row, 1, QTableWidgetItem(item.get('name', '')))
 
             zscore = item.get('zscore', 0)
-            zscore_item = QTableWidgetItem(f"{zscore:.4f}")
+            zscore_item = NumericTableWidgetItem(f"{zscore:.4f}", zscore)
             
             zone_code = item.get('zone_code', '')
             if zone_code == 'safe':
@@ -1863,23 +1931,23 @@ class ScreenerTab(QWidget):
             self._result_table.setItem(row, 2, zscore_item)
 
             x1 = item.get('x1', 0)
-            x1_item = QTableWidgetItem(f"{x1:.4f}")
+            x1_item = NumericTableWidgetItem(f"{x1:.4f}", x1)
             self._result_table.setItem(row, 3, x1_item)
 
             x2 = item.get('x2', 0)
-            x2_item = QTableWidgetItem(f"{x2:.4f}")
+            x2_item = NumericTableWidgetItem(f"{x2:.4f}", x2)
             self._result_table.setItem(row, 4, x2_item)
 
             x3 = item.get('x3', 0)
-            x3_item = QTableWidgetItem(f"{x3:.4f}")
+            x3_item = NumericTableWidgetItem(f"{x3:.4f}", x3)
             self._result_table.setItem(row, 5, x3_item)
 
             x4 = item.get('x4', 0)
-            x4_item = QTableWidgetItem(f"{x4:.4f}")
+            x4_item = NumericTableWidgetItem(f"{x4:.4f}", x4)
             self._result_table.setItem(row, 6, x4_item)
 
             x5 = item.get('x5', 0)
-            x5_item = QTableWidgetItem(f"{x5:.4f}")
+            x5_item = NumericTableWidgetItem(f"{x5:.4f}", x5)
             self._result_table.setItem(row, 7, x5_item)
 
             zone = item.get('zone', '未知')
@@ -1895,8 +1963,11 @@ class ScreenerTab(QWidget):
             current_price = item.get('current_price', 0)
             change_pct = item.get('change_percent', 0)
 
-            price_item = QTableWidgetItem(f"{current_price:.2f}" if current_price else "--")
-            change_item = QTableWidgetItem(f"{change_pct:+.2f}%" if change_pct else "--")
+            price_text = f"{current_price:.2f}" if current_price else "--"
+            price_item = NumericTableWidgetItem(price_text, current_price if current_price else float('-inf'))
+            
+            change_text = f"{change_pct:+.2f}%" if change_pct else "--"
+            change_item = NumericTableWidgetItem(change_text, change_pct if change_pct else float('-inf'))
 
             if change_pct > 0:
                 color = QColor(0, 150, 0)
@@ -1916,6 +1987,8 @@ class ScreenerTab(QWidget):
             if in_watchlist:
                 watchlist_item.setForeground(QColor(0, 150, 0))
             self._result_table.setItem(row, 11, watchlist_item)
+        
+        self._result_table.setSortingEnabled(True)
 
     def _format_number(self, num: float) -> str:
         if num >= 1_000_000:
@@ -2354,6 +2427,7 @@ class TechnicalAnalysisTab(QWidget):
         self._current_data: Optional[Dict[str, Any]] = None
         self._init_ui()
         self._load_watchlist()
+        self._watchlist_manager.add_update_callback(self._load_watchlist)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
