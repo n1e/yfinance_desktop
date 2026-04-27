@@ -19,6 +19,7 @@ from .news_manager import NewsManager
 from .screener import StockScreener
 from .valuation_analyzer import ValuationAnalyzer
 from .radar_chart import RadarChartWidget, DimensionScoreBar, TotalScoreDisplay
+from .market_indicators import MarketIndicators, IndicatorResult
 
 
 class ValuationTab(QWidget):
@@ -1892,6 +1893,272 @@ class SettingsTab(QWidget):
         self._load_settings()
 
 
+class MarketIndicatorTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._market_indicators = MarketIndicators()
+        self._refresh_thread = None
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        control_group = QGroupBox("操作")
+        control_layout = QHBoxLayout(control_group)
+
+        self._refresh_btn = QPushButton("刷新指标数据")
+        self._refresh_btn.setMinimumHeight(35)
+        self._refresh_btn.clicked.connect(self._refresh_indicators)
+        control_layout.addWidget(self._refresh_btn)
+
+        self._force_refresh_btn = QPushButton("强制刷新 (忽略缓存)")
+        self._force_refresh_btn.setMinimumHeight(35)
+        self._force_refresh_btn.clicked.connect(lambda: self._refresh_indicators(force=True))
+        control_layout.addWidget(self._force_refresh_btn)
+
+        self._cache_info_label = QLabel("缓存有效期: 24小时")
+        self._cache_info_label.setStyleSheet("color: #666; font-size: 12px;")
+        control_layout.addSpacing(20)
+        control_layout.addWidget(self._cache_info_label)
+
+        control_layout.addStretch()
+
+        layout.addWidget(control_group)
+
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setVisible(False)
+        layout.addWidget(self._progress_bar)
+
+        self._status_label = QLabel("点击刷新按钮获取最新指标数据")
+        self._status_label.setStyleSheet("color: #666; font-size: 14px;")
+        layout.addWidget(self._status_label)
+
+        indicators_layout = QVBoxLayout()
+        
+        self._buffett_group = self._create_indicator_group("巴菲特指标 (Buffett Indicator)")
+        indicators_layout.addWidget(self._buffett_group)
+
+        self._shiller_cape_group = self._create_indicator_group("席勒CAPE (Shiller PE Ratio)")
+        indicators_layout.addWidget(self._shiller_cape_group)
+
+        self._sp500_pe_group = self._create_indicator_group("标普500 PE分位数")
+        indicators_layout.addWidget(self._sp500_pe_group)
+
+        layout.addLayout(indicators_layout, 1)
+
+    def _create_indicator_group(self, title: str) -> QGroupBox:
+        group = QGroupBox(title)
+        layout = QVBoxLayout(group)
+        layout.setSpacing(10)
+
+        info_layout = QHBoxLayout()
+        
+        current_layout = QVBoxLayout()
+        current_label = QLabel("当前值:")
+        current_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        current_layout.addWidget(current_label)
+        
+        self._create_value_widget(current_layout, f"{title}_current")
+        info_layout.addLayout(current_layout)
+
+        info_layout.addSpacing(20)
+
+        status_layout = QVBoxLayout()
+        status_label = QLabel("估值状态:")
+        status_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        status_layout.addWidget(status_label)
+        
+        self._create_value_widget(status_layout, f"{title}_status")
+        info_layout.addLayout(status_layout)
+
+        info_layout.addSpacing(20)
+
+        percentile_layout = QVBoxLayout()
+        percentile_label = QLabel("历史百分位:")
+        percentile_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        percentile_layout.addWidget(percentile_label)
+        
+        self._create_value_widget(percentile_layout, f"{title}_percentile")
+        info_layout.addLayout(percentile_layout)
+
+        info_layout.addStretch()
+
+        layout.addLayout(info_layout)
+
+        stats_layout = QHBoxLayout()
+        
+        min_layout = QVBoxLayout()
+        min_label = QLabel("历史最低:")
+        min_label.setStyleSheet("font-size: 11px; color: #666;")
+        min_layout.addWidget(min_label)
+        self._create_value_widget(min_layout, f"{title}_min", small=True)
+        stats_layout.addLayout(min_layout)
+
+        stats_layout.addSpacing(15)
+
+        avg_layout = QVBoxLayout()
+        avg_label = QLabel("历史平均:")
+        avg_label.setStyleSheet("font-size: 11px; color: #666;")
+        avg_layout.addWidget(avg_label)
+        self._create_value_widget(avg_layout, f"{title}_avg", small=True)
+        stats_layout.addLayout(avg_layout)
+
+        stats_layout.addSpacing(15)
+
+        max_layout = QVBoxLayout()
+        max_label = QLabel("历史最高:")
+        max_label.setStyleSheet("font-size: 11px; color: #666;")
+        max_layout.addWidget(max_label)
+        self._create_value_widget(max_layout, f"{title}_max", small=True)
+        stats_layout.addLayout(max_layout)
+
+        stats_layout.addStretch()
+
+        layout.addLayout(stats_layout)
+
+        desc_label = QLabel("")
+        desc_label.setStyleSheet("font-size: 11px; color: #888; font-style: italic;")
+        desc_label.setWordWrap(True)
+        desc_label.setObjectName(f"{title}_desc")
+        layout.addWidget(desc_label)
+
+        return group
+
+    def _create_value_widget(self, layout: QVBoxLayout, name: str, small: bool = False):
+        value_label = QLabel("--")
+        if small:
+            value_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        else:
+            value_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        value_label.setObjectName(name)
+        layout.addWidget(value_label)
+
+    def _refresh_indicators(self, force: bool = False):
+        if self._refresh_thread and self._refresh_thread.isRunning():
+            QMessageBox.warning(self, "提示", "指标刷新正在进行中，请稍候...")
+            return
+
+        self._refresh_btn.setEnabled(False)
+        self._force_refresh_btn.setEnabled(False)
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setRange(0, 0)
+        
+        if force:
+            self._status_label.setText("正在强制刷新指标数据 (忽略缓存)...")
+        else:
+            self._status_label.setText("正在获取指标数据...")
+
+        self._refresh_thread = MarketIndicatorRefreshThread(
+            self._market_indicators, force
+        )
+        self._refresh_thread.finished_signal.connect(self._on_refresh_finished)
+        self._refresh_thread.error_signal.connect(self._on_refresh_error)
+        self._refresh_thread.start()
+
+    def _on_refresh_finished(self, results: Dict[str, Any]):
+        self._refresh_btn.setEnabled(True)
+        self._force_refresh_btn.setEnabled(True)
+        self._progress_bar.setVisible(False)
+        self._status_label.setText(f"指标数据刷新完成 - {datetime.now().strftime('%H:%M:%S')}")
+
+        if results.get('buffett'):
+            self._display_indicator(self._buffett_group, results['buffett'])
+        
+        if results.get('shiller_cape'):
+            self._display_indicator(self._shiller_cape_group, results['shiller_cape'])
+        
+        if results.get('sp500_pe'):
+            self._display_indicator(self._sp500_pe_group, results['sp500_pe'])
+
+    def _on_refresh_error(self, error_msg: str):
+        self._refresh_btn.setEnabled(True)
+        self._force_refresh_btn.setEnabled(True)
+        self._progress_bar.setVisible(False)
+        self._status_label.setText(f"刷新出错: {error_msg}")
+        QMessageBox.critical(self, "错误", f"刷新指标数据时出错:\n{error_msg}")
+
+    def _display_indicator(self, group: QGroupBox, result: Dict[str, Any]):
+        title = group.title()
+        
+        current_widget = group.findChild(QLabel, f"{title}_current")
+        if current_widget and result.get('current_value') is not None:
+            current_widget.setText(f"{result['current_value']:.2f}")
+
+        status_widget = group.findChild(QLabel, f"{title}_status")
+        if status_widget and result.get('status'):
+            status_widget.setText(result['status'])
+            
+            color = result.get('status_color', '')
+            if color == 'green':
+                status_widget.setStyleSheet("font-size: 18px; font-weight: bold; color: #22c55e;")
+            elif color == 'blue':
+                status_widget.setStyleSheet("font-size: 18px; font-weight: bold; color: #3b82f6;")
+            elif color == 'red':
+                status_widget.setStyleSheet("font-size: 18px; font-weight: bold; color: #ef4444;")
+            else:
+                status_widget.setStyleSheet("font-size: 18px; font-weight: bold;")
+
+        percentile_widget = group.findChild(QLabel, f"{title}_percentile")
+        if percentile_widget and result.get('percentile') is not None:
+            percentile_widget.setText(f"{result['percentile']:.1f}%")
+
+        min_widget = group.findChild(QLabel, f"{title}_min")
+        if min_widget and result.get('min_value') is not None:
+            min_widget.setText(f"{result['min_value']:.2f}")
+
+        avg_widget = group.findChild(QLabel, f"{title}_avg")
+        if avg_widget and result.get('avg_value') is not None:
+            avg_widget.setText(f"{result['avg_value']:.2f}")
+
+        max_widget = group.findChild(QLabel, f"{title}_max")
+        if max_widget and result.get('max_value') is not None:
+            max_widget.setText(f"{result['max_value']:.2f}")
+
+        desc_widget = group.findChild(QLabel, f"{title}_desc")
+        if desc_widget and result.get('description'):
+            desc_widget.setText(result['description'])
+
+    def refresh(self):
+        self._refresh_indicators(force=False)
+
+
+class MarketIndicatorRefreshThread(QThread):
+    finished_signal = pyqtSignal(dict)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, indicators: MarketIndicators, force_refresh: bool = False):
+        super().__init__()
+        self._indicators = indicators
+        self._force_refresh = force_refresh
+
+    def run(self):
+        try:
+            results = self._indicators.get_all_indicators(force_refresh=self._force_refresh)
+            
+            formatted_results = {}
+            for key, result in results.items():
+                if result:
+                    formatted_results[key] = {
+                        'name': result.name,
+                        'current_value': result.current_value,
+                        'historical_values': result.historical_values,
+                        'status': result.status,
+                        'status_color': result.status_color,
+                        'percentile': result.percentile,
+                        'min_value': result.min_value,
+                        'max_value': result.max_value,
+                        'avg_value': result.avg_value,
+                        'description': result.description
+                    }
+            
+            self.finished_signal.emit(formatted_results)
+            
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1917,12 +2184,14 @@ class MainWindow(QMainWindow):
         self._news_tab = NewsTab()
         self._screener_tab = ScreenerTab()
         self._valuation_tab = ValuationTab()
+        self._market_indicator_tab = MarketIndicatorTab()
         self._settings_tab = SettingsTab()
 
         self._tab_widget.addTab(self._watchlist_tab, "自选股")
         self._tab_widget.addTab(self._news_tab, "资讯")
         self._tab_widget.addTab(self._screener_tab, "选股工具")
         self._tab_widget.addTab(self._valuation_tab, "估值分析")
+        self._tab_widget.addTab(self._market_indicator_tab, "市场指标")
         self._tab_widget.addTab(self._settings_tab, "设置")
 
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -1978,8 +2247,12 @@ class MainWindow(QMainWindow):
         valuation_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(3))
         view_menu.addAction(valuation_action)
 
+        market_indicator_action = QAction("市场指标(&M)", self)
+        market_indicator_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(4))
+        view_menu.addAction(market_indicator_action)
+
         settings_action = QAction("设置(&T)", self)
-        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(4))
+        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(5))
         view_menu.addAction(settings_action)
 
         help_menu = menubar.addMenu("帮助(&H)")
@@ -2008,6 +2281,8 @@ class MainWindow(QMainWindow):
         elif index == 3:
             self._status_bar.showMessage("估值分析页面")
         elif index == 4:
+            self._status_bar.showMessage("市场指标页面")
+        elif index == 5:
             self._status_bar.showMessage("设置页面")
 
     def _refresh_current_tab(self):
@@ -2021,6 +2296,8 @@ class MainWindow(QMainWindow):
         elif current_index == 3:
             self._valuation_tab.refresh()
         elif current_index == 4:
+            self._market_indicator_tab.refresh()
+        elif current_index == 5:
             self._settings_tab.refresh()
 
         self._status_bar.showMessage(f"手动刷新于 {datetime.now().strftime('%H:%M:%S')}")
