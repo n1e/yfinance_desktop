@@ -22,6 +22,7 @@ from .radar_chart import RadarChartWidget, DimensionScoreBar, TotalScoreDisplay
 from .market_indicators import MarketIndicators, IndicatorResult
 from .technical_analyzer import TechnicalAnalyzer
 from .technical_charts import PriceChartWidget, SignalDisplayWidget
+from .multi_factor_gui import MultiFactorScreenerTab
 
 
 class ValuationTab(QWidget):
@@ -2755,6 +2756,7 @@ class MainWindow(QMainWindow):
         self._watchlist_tab = WatchlistTab()
         self._news_tab = NewsTab()
         self._screener_tab = ScreenerTab()
+        self._multi_factor_tab = MultiFactorScreenerTab()
         self._valuation_tab = ValuationTab()
         self._technical_analysis_tab = TechnicalAnalysisTab()
         self._market_indicator_tab = MarketIndicatorTab()
@@ -2763,6 +2765,7 @@ class MainWindow(QMainWindow):
         self._tab_widget.addTab(self._watchlist_tab, "自选股")
         self._tab_widget.addTab(self._news_tab, "资讯")
         self._tab_widget.addTab(self._screener_tab, "选股工具")
+        self._tab_widget.addTab(self._multi_factor_tab, "多因子选股")
         self._tab_widget.addTab(self._valuation_tab, "估值分析")
         self._tab_widget.addTab(self._technical_analysis_tab, "技术分析")
         self._tab_widget.addTab(self._market_indicator_tab, "市场指标")
@@ -2817,20 +2820,24 @@ class MainWindow(QMainWindow):
         screener_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(2))
         view_menu.addAction(screener_action)
 
+        multi_factor_action = QAction("多因子选股(&F)", self)
+        multi_factor_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(3))
+        view_menu.addAction(multi_factor_action)
+
         valuation_action = QAction("估值分析(&V)", self)
-        valuation_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(3))
+        valuation_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(4))
         view_menu.addAction(valuation_action)
 
         technical_analysis_action = QAction("技术分析(&T)", self)
-        technical_analysis_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(4))
+        technical_analysis_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(5))
         view_menu.addAction(technical_analysis_action)
 
         market_indicator_action = QAction("市场指标(&M)", self)
-        market_indicator_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(5))
+        market_indicator_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(6))
         view_menu.addAction(market_indicator_action)
 
         settings_action = QAction("设置(&S)", self)
-        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(6))
+        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(7))
         view_menu.addAction(settings_action)
 
         help_menu = menubar.addMenu("帮助(&H)")
@@ -2857,12 +2864,14 @@ class MainWindow(QMainWindow):
         elif index == 2:
             self._status_bar.showMessage("选股工具页面")
         elif index == 3:
-            self._status_bar.showMessage("估值分析页面")
+            self._status_bar.showMessage("多因子选股页面")
         elif index == 4:
-            self._status_bar.showMessage("技术分析页面")
+            self._status_bar.showMessage("估值分析页面")
         elif index == 5:
-            self._status_bar.showMessage("市场指标页面")
+            self._status_bar.showMessage("技术分析页面")
         elif index == 6:
+            self._status_bar.showMessage("市场指标页面")
+        elif index == 7:
             self._status_bar.showMessage("设置页面")
 
     def _refresh_current_tab(self):
@@ -2874,12 +2883,14 @@ class MainWindow(QMainWindow):
         elif current_index == 2:
             self._screener_tab.refresh()
         elif current_index == 3:
-            self._valuation_tab.refresh()
+            self._multi_factor_tab.refresh()
         elif current_index == 4:
-            self._technical_analysis_tab.refresh()
+            self._valuation_tab.refresh()
         elif current_index == 5:
-            self._market_indicator_tab.refresh()
+            self._technical_analysis_tab.refresh()
         elif current_index == 6:
+            self._market_indicator_tab.refresh()
+        elif current_index == 7:
             self._settings_tab.refresh()
 
         self._status_bar.showMessage(f"手动刷新于 {datetime.now().strftime('%H:%M:%S')}")
