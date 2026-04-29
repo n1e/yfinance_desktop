@@ -341,10 +341,10 @@ class MultiFactorScreener:
             ma_long_series = ma_values[ma_long]
 
             if len(ma_short_series) >= 2 and len(ma_long_series) >= 2:
-                current_short = ma_short_series.iloc[-1]
-                current_long = ma_long_series.iloc[-1]
-                prev_short = ma_short_series.iloc[-2]
-                prev_long = ma_long_series.iloc[-2]
+                current_short = ma_short_series[-1]
+                current_long = ma_long_series[-1]
+                prev_short = ma_short_series[-2]
+                prev_long = ma_long_series[-2]
 
                 details = {
                     f'MA{ma_short}': current_short,
@@ -474,10 +474,10 @@ class MultiFactorScreener:
                 signal_line = macd_data['signal_line']
 
                 if len(macd_line) >= 2 and len(signal_line) >= 2:
-                    current_macd = macd_line.iloc[-1]
-                    current_signal = signal_line.iloc[-1]
-                    prev_macd = macd_line.iloc[-2]
-                    prev_signal = signal_line.iloc[-2]
+                    current_macd = macd_line[-1]
+                    current_signal = signal_line[-1]
+                    prev_macd = macd_line[-2]
+                    prev_signal = signal_line[-2]
 
                     if current_macd > current_signal and prev_macd <= prev_signal:
                         score = weight
@@ -611,10 +611,10 @@ class MultiFactorScreener:
                 d_series = kdj_data['d']
 
                 if len(k_series) >= 2 and len(d_series) >= 2:
-                    current_k = k_series.iloc[-1]
-                    current_d = d_series.iloc[-1]
-                    prev_k = k_series.iloc[-2]
-                    prev_d = d_series.iloc[-2]
+                    current_k = k_series[-1]
+                    current_d = d_series[-1]
+                    prev_k = k_series[-2]
+                    prev_d = d_series[-2]
 
                     if current_k > current_d and prev_k <= prev_d:
                         score = weight
