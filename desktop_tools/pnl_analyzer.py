@@ -341,13 +341,15 @@ class BubbleChartWidget(BaseChartWidget):
 
         self._draw_axes(painter, rect, x_min, x_max, y_min, y_max)
 
-        min_size = 15
-        max_size = 60
+        min_size = 70
+        max_size = 180
 
         zero_x = rect.left() + (0 - x_min) / (x_max - x_min) * rect.width()
         if rect.left() <= zero_x <= rect.right():
             painter.setPen(QPen(self.COLOR_GRAY, 1, Qt.DashLine))
             painter.drawLine(int(zero_x), int(rect.top()), int(zero_x), int(rect.bottom()))
+
+        label_offsets = []
 
         for item in data:
             x = rect.left() + (item.pnl_percent - x_min) / (x_max - x_min) * rect.width()
@@ -377,14 +379,48 @@ class BubbleChartWidget(BaseChartWidget):
             painter.drawEllipse(int(x - bubble_size/2), int(y - bubble_size/2), int(bubble_size), int(bubble_size))
             painter.setOpacity(1.0)
 
+            if bubble_size >= 120:
+                font_size = 11
+            elif bubble_size >= 100:
+                font_size = 10
+            elif bubble_size >= 80:
+                font_size = 9
+            else:
+                font_size = 8
+
             painter.setPen(QPen(self.COLOR_DARK_GRAY, 1))
-            painter.setFont(QFont('Microsoft YaHei', 9, QFont.Bold))
+            painter.setFont(QFont('Microsoft YaHei', font_size, QFont.Bold))
             symbol_text = item.symbol
             painter.drawText(
                 int(x - bubble_size/2), int(y - bubble_size/2),
                 int(bubble_size), int(bubble_size),
                 Qt.AlignCenter, symbol_text
             )
+
+            label_y = int(y + bubble_size/2 + 5)
+            label_offsets.append((item, x, label_y, bubble_size, color))
+
+        legend_y = int(rect.bottom() + 15)
+        painter.setFont(QFont('Microsoft YaHei', 8))
+        
+        legend_x_start = int(rect.left())
+        legend_spacing = 140
+        max_per_row = 5
+        
+        for idx, (item, x, label_y, bubble_size, color) in enumerate(label_offsets):
+            row = idx // max_per_row
+            col = idx % max_per_row
+            
+            legend_x = legend_x_start + col * legend_spacing
+            legend_item_y = legend_y + row * 20
+            
+            painter.setPen(QPen(color, 1))
+            painter.setBrush(QBrush(color))
+            painter.drawRect(legend_x, legend_item_y - 8, 12, 12)
+            
+            painter.setPen(QPen(self.COLOR_DARK_GRAY, 1))
+            info_text = f"{item.symbol} ({item.quantity}股)"
+            painter.drawText(legend_x + 18, legend_item_y + 4, info_text)
 
     def _draw_axes(self, painter: QPainter, rect: QRectF, x_min: float, x_max: float, y_min: float, y_max: float):
         painter.setPen(QPen(self.COLOR_GRAY, 1, Qt.SolidLine))
@@ -640,28 +676,28 @@ class PriceComparisonChartWidget(BaseChartWidget):
                 painter.setPen(QPen(Qt.white, 1))
                 painter.drawText(int(current_x), int(current_y + 3), int(bar_width), 12, Qt.AlignCenter, current_text)
 
-        legend_y = 10
+        legend_y = 8
         painter.setFont(QFont('Microsoft YaHei', 9))
         
-        legend_x = int(rect.right() - 300)
+        legend_x = int(rect.left())
         
         painter.setPen(QPen(self.COLOR_ORANGE, 1))
         painter.setBrush(QBrush(self.COLOR_ORANGE))
-        painter.drawRect(legend_x, legend_y, 15, 12)
+        painter.drawRect(legend_x, legend_y, 18, 14)
         painter.setPen(QPen(self.COLOR_GRAY, 1))
-        painter.drawText(legend_x + 20, legend_y + 11, "成本价")
+        painter.drawText(legend_x + 25, legend_y + 12, "成本价")
 
         painter.setPen(QPen(self.COLOR_GREEN, 1))
         painter.setBrush(QBrush(self.COLOR_GREEN))
-        painter.drawRect(legend_x + 80, legend_y, 15, 12)
+        painter.drawRect(legend_x + 85, legend_y, 18, 14)
         painter.setPen(QPen(self.COLOR_GRAY, 1))
-        painter.drawText(legend_x + 100, legend_y + 11, "现价(盈利)")
+        painter.drawText(legend_x + 110, legend_y + 12, "现价(盈利)")
 
         painter.setPen(QPen(self.COLOR_RED, 1))
         painter.setBrush(QBrush(self.COLOR_RED))
-        painter.drawRect(legend_x + 180, legend_y, 15, 12)
+        painter.drawRect(legend_x + 195, legend_y, 18, 14)
         painter.setPen(QPen(self.COLOR_GRAY, 1))
-        painter.drawText(legend_x + 200, legend_y + 11, "现价(亏损)")
+        painter.drawText(legend_x + 220, legend_y + 12, "现价(亏损)")
 
 
 class PnLRankingTable(QWidget):
