@@ -32,6 +32,7 @@ class RankingWorker(QThread):
     progress_signal = pyqtSignal(int, int, str)
     finished_signal = pyqtSignal(list)
     error_signal = pyqtSignal(str)
+    completed_signal = pyqtSignal()
 
     def __init__(
         self,
@@ -43,6 +44,7 @@ class RankingWorker(QThread):
         self._calculator = calculator
         self._symbols = symbols
         self._weights = weights
+        self._is_cancelled = False
 
     def run(self):
         results = []
@@ -50,6 +52,9 @@ class RankingWorker(QThread):
 
         try:
             for i, symbol in enumerate(self._symbols):
+                if self._is_cancelled:
+                    break
+
                 self.progress_signal.emit(i + 1, total, symbol)
 
                 try:
@@ -60,11 +65,18 @@ class RankingWorker(QThread):
                     print(f"计算 {symbol} 评分失败: {e}")
                     continue
 
-            results.sort(key=lambda x: x.weighted_score if x else 0, reverse=True)
-            self.finished_signal.emit(results)
+            if not self._is_cancelled:
+                results.sort(key=lambda x: x.weighted_score if x else 0, reverse=True)
+                self.finished_signal.emit(results)
 
         except Exception as e:
-            self.error_signal.emit(str(e))
+            if not self._is_cancelled:
+                self.error_signal.emit(str(e))
+        finally:
+            self.completed_signal.emit()
+
+    def cancel(self):
+        self._is_cancelled = True
 
 
 class ScoreRankingWidget(QWidget):
@@ -199,15 +211,31 @@ class ScoreRankingWidget(QWidget):
 
         self._display_results(self._current_results)
 
+    def _cleanup_worker(self):
+        if self._ranking_worker is not None:
+            try:
+                if self._ranking_worker.isRunning():
+                    self._ranking_worker.cancel()
+                    self._ranking_worker.quit()
+                    if not self._ranking_worker.wait(3000):
+                        self._ranking_worker.terminate()
+                        self._ranking_worker.wait()
+            except Exception:
+                pass
+            finally:
+                self._ranking_worker = None
+
     def _analyze_all_stocks(self):
         watchlist = self._watchlist_manager.watchlist
         if not watchlist:
             QMessageBox.information(self, "提示", "自选股列表为空，请先添加股票")
             return
 
-        if self._ranking_worker and self._ranking_worker.isRunning():
+        if self._ranking_worker is not None and self._ranking_worker.isRunning():
             QMessageBox.information(self, "提示", "评分计算正在进行中，请稍候...")
             return
+
+        self._cleanup_worker()
 
         self._refresh_btn.setEnabled(False)
         self._analyze_all_btn.setEnabled(False)
@@ -216,15 +244,18 @@ class ScoreRankingWidget(QWidget):
         self._progress_bar.setValue(0)
         self._status_label.setText(f"开始计算 {len(watchlist)} 只股票的评分...")
 
-        self._ranking_worker = RankingWorker(
+        worker = RankingWorker(
             self._score_calculator,
             watchlist,
             self._current_weights
         )
-        self._ranking_worker.progress_signal.connect(self._on_progress)
-        self._ranking_worker.finished_signal.connect(self._on_analysis_finished)
-        self._ranking_worker.error_signal.connect(self._on_analysis_error)
-        self._ranking_worker.start()
+        worker.progress_signal.connect(self._on_progress)
+        worker.finished_signal.connect(self._on_analysis_finished)
+        worker.error_signal.connect(self._on_analysis_error)
+        worker.finished.connect(worker.deleteLater)
+
+        self._ranking_worker = worker
+        worker.start()
 
     def _on_progress(self, current: int, total: int, symbol: str):
         self._progress_bar.setValue(current)

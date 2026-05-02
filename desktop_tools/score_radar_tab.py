@@ -23,20 +23,29 @@ class ScoreAnalysisThread(QThread):
     progress_signal = pyqtSignal(int, int, str)
     finished_signal = pyqtSignal(object)
     error_signal = pyqtSignal(str)
+    completed_signal = pyqtSignal()
 
     def __init__(self, calculator: ScoreCalculator, symbol: str, weights: Optional[Dict[str, float]] = None):
         super().__init__()
         self._calculator = calculator
         self._symbol = symbol
         self._weights = weights
+        self._is_cancelled = False
 
     def run(self):
         try:
             self.progress_signal.emit(0, 1, self._symbol)
             result = self._calculator.calculate_score(self._symbol, self._weights)
-            self.finished_signal.emit(result)
+            if not self._is_cancelled:
+                self.finished_signal.emit(result)
         except Exception as e:
-            self.error_signal.emit(str(e))
+            if not self._is_cancelled:
+                self.error_signal.emit(str(e))
+        finally:
+            self.completed_signal.emit()
+
+    def cancel(self):
+        self._is_cancelled = True
 
 
 class ScoreRadarTab(QWidget):
@@ -315,31 +324,50 @@ class ScoreRadarTab(QWidget):
 
         return symbols[:5]
 
+    def _cleanup_thread(self):
+        if self._analysis_thread is not None:
+            try:
+                if self._analysis_thread.isRunning():
+                    self._analysis_thread.cancel()
+                    self._analysis_thread.quit()
+                    if not self._analysis_thread.wait(3000):
+                        self._analysis_thread.terminate()
+                        self._analysis_thread.wait()
+            except Exception:
+                pass
+            finally:
+                self._analysis_thread = None
+
     def _analyze_single_stock(self):
         symbol = self._get_selected_single_symbol()
         if not symbol:
             QMessageBox.warning(self, "提示", "请选择或输入股票代码")
             return
 
-        if self._analysis_thread and self._analysis_thread.isRunning():
+        if self._analysis_thread is not None and self._analysis_thread.isRunning():
             QMessageBox.information(self, "提示", "分析正在进行中，请稍候...")
             return
+
+        self._cleanup_thread()
 
         weights = self._weight_config.get_normalized_weights()
 
         self._single_analyze_btn.setEnabled(False)
-        self._analysis_thread = ScoreAnalysisThread(
+        thread = ScoreAnalysisThread(
             self._score_calculator,
             symbol,
             weights
         )
-        self._analysis_thread.finished_signal.connect(self._on_single_analysis_finished)
-        self._analysis_thread.error_signal.connect(self._on_analysis_error)
-        self._analysis_thread.start()
+        thread.finished_signal.connect(self._on_single_analysis_finished)
+        thread.error_signal.connect(self._on_analysis_error)
+        thread.completed_signal.connect(self._on_thread_completed)
+        thread.finished.connect(thread.deleteLater)
+
+        self._analysis_thread = thread
+        thread.start()
 
     def _on_single_analysis_finished(self, result: Optional[StockScoreResult]):
         self._single_analyze_btn.setEnabled(True)
-        self._analysis_thread = None
 
         if result is None:
             QMessageBox.warning(self, "提示", "无法获取股票评分数据")
@@ -348,6 +376,9 @@ class ScoreRadarTab(QWidget):
         self._current_result = result
         self._single_radar.set_data(result)
         self._detail_panel.set_result(result)
+
+    def _on_thread_completed(self):
+        pass
 
     def _analyze_compare_stocks(self):
         symbols = self._get_selected_compare_symbols()
@@ -483,7 +514,6 @@ class ScoreRadarTab(QWidget):
 
     def _on_analysis_error(self, error_msg: str):
         self._single_analyze_btn.setEnabled(True)
-        self._analysis_thread = None
         QMessageBox.critical(self, "错误", f"分析过程中出错:\n{error_msg}")
 
     def refresh(self):

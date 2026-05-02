@@ -867,7 +867,7 @@ class ScoreCalculator:
         score = DimensionScore(name=ScoreDimension.VOLATILITY.value)
 
         try:
-            metrics = self._volatility_analyzer.analyze_symbol(symbol, period='6mo')
+            metrics = self._volatility_analyzer.analyze_stock(symbol, period='6mo')
 
             if metrics is None:
                 score.score = 50.0
@@ -876,79 +876,75 @@ class ScoreCalculator:
                 return score
 
             score.raw_metrics = {
-                'daily_volatility': metrics.daily_volatility,
-                'annualized_volatility': metrics.annualized_volatility,
-                'beta': metrics.beta,
-                'max_drawdown': metrics.max_drawdown,
-                'sharpe_ratio': metrics.sharpe_ratio,
-                'sortino_ratio': metrics.sortino_ratio,
-                'var_95': metrics.var_95,
-                'cvar_95': metrics.cvar_95,
+                'vol_5d': metrics.vol_5d,
+                'vol_5d_annualized': metrics.vol_5d_annualized,
+                'vol_10d': metrics.vol_10d,
+                'vol_10d_annualized': metrics.vol_10d_annualized,
+                'vol_20d': metrics.vol_20d,
+                'vol_20d_annualized': metrics.vol_20d_annualized,
+                'vol_60d': metrics.vol_60d,
+                'vol_60d_annualized': metrics.vol_60d_annualized,
+                'vol_ratio_5_20': metrics.vol_ratio_5_20,
+                'vol_ratio_20_60': metrics.vol_ratio_20_60,
+                'vol_trend': metrics.vol_trend,
+                'current_vol': metrics.current_vol,
+                'historical_vol_mean': metrics.historical_vol_mean,
+                'historical_vol_std': metrics.historical_vol_std,
+                'alert_type': metrics.alert_type.value if metrics.alert_type else None,
+                'volatility_return_correlation': metrics.volatility_return_correlation,
+                'correlation_significance': metrics.correlation_significance,
             }
 
             total_score = 0.0
             max_score = 0.0
 
-            ann_vol = metrics.annualized_volatility
+            ann_vol = metrics.vol_20d_annualized
             if ann_vol and ann_vol > 0:
                 if ann_vol < 0.15:
-                    total_score += 30
+                    total_score += 35
                 elif ann_vol < 0.25:
-                    total_score += 25
+                    total_score += 30
                 elif ann_vol < 0.35:
-                    total_score += 15
+                    total_score += 20
                 elif ann_vol < 0.50:
-                    total_score += 5
-                else:
-                    total_score -= 10
-                max_score += 30
-
-            beta = metrics.beta
-            if beta is not None and not np.isnan(beta):
-                if 0.8 <= beta <= 1.2:
-                    total_score += 20
-                elif 0.5 <= beta < 0.8 or 1.2 < beta <= 1.5:
-                    total_score += 15
-                elif beta < 0.5 or beta > 1.5:
-                    total_score += 5
-                max_score += 20
-
-            max_dd = metrics.max_drawdown
-            if max_dd is not None and not np.isnan(max_dd):
-                if max_dd > -0.10:
-                    total_score += 20
-                elif max_dd > -0.20:
-                    total_score += 15
-                elif max_dd > -0.30:
                     total_score += 10
-                elif max_dd > -0.50:
-                    total_score += 3
                 else:
-                    total_score -= 10
+                    total_score -= 15
+                max_score += 35
+
+            vol_ratio_20_60 = metrics.vol_ratio_20_60
+            if vol_ratio_20_60 and vol_ratio_20_60 > 0:
+                if 0.9 <= vol_ratio_20_60 <= 1.1:
+                    total_score += 20
+                elif 0.8 <= vol_ratio_20_60 < 0.9 or 1.1 < vol_ratio_20_60 <= 1.2:
+                    total_score += 15
+                elif 0.7 <= vol_ratio_20_60 < 0.8 or 1.2 < vol_ratio_20_60 <= 1.4:
+                    total_score += 8
+                else:
+                    total_score -= 5
                 max_score += 20
 
-            sharpe = metrics.sharpe_ratio
-            if sharpe is not None and not np.isnan(sharpe):
-                if sharpe > 1.5:
+            alert_type = metrics.alert_type
+            if alert_type:
+                from .volatility_analyzer import VolatilityAlertType
+                if alert_type == VolatilityAlertType.NO_ALERT:
                     total_score += 15
-                elif sharpe > 1.0:
-                    total_score += 12
-                elif sharpe > 0.5:
-                    total_score += 8
-                elif sharpe > 0:
-                    total_score += 4
+                elif alert_type == VolatilityAlertType.BREAKOUT_LOW:
+                    total_score += 10
+                elif alert_type == VolatilityAlertType.BREAKOUT_HIGH:
+                    total_score -= 10
                 max_score += 15
 
-            sortino = metrics.sortino_ratio
-            if sortino is not None and not np.isnan(sortino):
-                if sortino > 1.5:
+            vol_return_corr = metrics.volatility_return_correlation
+            if vol_return_corr is not None and not np.isnan(vol_return_corr):
+                if vol_return_corr < -0.3:
                     total_score += 15
-                elif sortino > 1.0:
-                    total_score += 12
-                elif sortino > 0.5:
-                    total_score += 8
-                elif sortino > 0:
-                    total_score += 4
+                elif vol_return_corr < -0.1:
+                    total_score += 10
+                elif vol_return_corr < 0.1:
+                    total_score += 5
+                elif vol_return_corr > 0.3:
+                    total_score -= 10
                 max_score += 15
 
             if max_score > 0:
@@ -961,6 +957,8 @@ class ScoreCalculator:
             score.details = self._generate_volatility_details(metrics)
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"计算波动率评分失败: {e}")
             score.score = 50.0
             score.details = {'summary': '波动率计算失败'}
@@ -977,29 +975,33 @@ class ScoreCalculator:
 
         metric_items = []
 
-        if metrics.annualized_volatility:
-            details['metrics']['年化波动率'] = f"{metrics.annualized_volatility*100:.1f}%"
-            metric_items.append(f"年化波动: {metrics.annualized_volatility*100:.1f}%")
+        if metrics.vol_20d_annualized:
+            details['metrics']['20日年化波动率'] = f"{metrics.vol_20d_annualized*100:.1f}%"
+            metric_items.append(f"20日年化波动: {metrics.vol_20d_annualized*100:.1f}%")
 
-        if metrics.beta is not None and not np.isnan(metrics.beta):
-            details['metrics']['Beta'] = f"{metrics.beta:.2f}"
-            metric_items.append(f"Beta: {metrics.beta:.2f}")
+        if metrics.vol_5d_annualized:
+            details['metrics']['5日年化波动率'] = f"{metrics.vol_5d_annualized*100:.1f}%"
+            metric_items.append(f"5日年化波动: {metrics.vol_5d_annualized*100:.1f}%")
 
-        if metrics.max_drawdown is not None and not np.isnan(metrics.max_drawdown):
-            details['metrics']['最大回撤'] = f"{metrics.max_drawdown*100:.1f}%"
-            metric_items.append(f"最大回撤: {metrics.max_drawdown*100:.1f}%")
+        if metrics.vol_60d_annualized:
+            details['metrics']['60日年化波动率'] = f"{metrics.vol_60d_annualized*100:.1f}%"
 
-        if metrics.sharpe_ratio is not None and not np.isnan(metrics.sharpe_ratio):
-            details['metrics']['夏普比率'] = f"{metrics.sharpe_ratio:.2f}"
-            metric_items.append(f"夏普: {metrics.sharpe_ratio:.2f}")
+        if metrics.vol_ratio_20_60 and metrics.vol_ratio_20_60 > 0:
+            details['metrics']['20日/60日波动率比'] = f"{metrics.vol_ratio_20_60:.2f}"
+            metric_items.append(f"20日/60日波动比: {metrics.vol_ratio_20_60:.2f}")
 
-        if metrics.sortino_ratio is not None and not np.isnan(metrics.sortino_ratio):
-            details['metrics']['索提诺比率'] = f"{metrics.sortino_ratio:.2f}"
+        if metrics.vol_trend:
+            details['metrics']['波动率趋势'] = metrics.vol_trend
+            metric_items.append(f"波动趋势: {metrics.vol_trend}")
 
-        if metrics.var_95 is not None and not np.isnan(metrics.var_95):
-            details['metrics']['VaR(95%)'] = f"{metrics.var_95*100:.1f}%"
+        if metrics.alert_type:
+            details['metrics']['波动率预警'] = metrics.alert_type.value
+            metric_items.append(f"预警状态: {metrics.alert_type.value}")
 
-        ann_vol = metrics.annualized_volatility
+        if metrics.correlation_significance:
+            details['metrics']['波动率-收益相关性'] = metrics.correlation_significance
+
+        ann_vol = metrics.vol_20d_annualized
         if ann_vol:
             if ann_vol < 0.15:
                 details['risk_level'] = "低风险"
