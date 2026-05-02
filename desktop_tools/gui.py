@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QUrl
 from PyQt5.QtGui import QFont, QColor, QDesktopServices, QIcon
 import sys
+import pandas as pd
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
