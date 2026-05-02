@@ -32,6 +32,7 @@ from .volatility_analyzer import (
 )
 from .score_radar_tab import ScoreRadarTab
 from .pnl_analyzer import PnLAnalysisTab
+from .portfolio_health_tab import PortfolioHealthTab
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
@@ -3516,6 +3517,7 @@ class MainWindow(QMainWindow):
         self._technical_analysis_tab = TechnicalAnalysisTab()
         self._market_indicator_tab = MarketIndicatorTab()
         self._score_radar_tab = ScoreRadarTab()
+        self._health_tab = PortfolioHealthTab()
         self._pnl_analysis_tab = PnLAnalysisTab()
         self._settings_tab = SettingsTab()
 
@@ -3528,6 +3530,7 @@ class MainWindow(QMainWindow):
         self._tab_widget.addTab(self._technical_analysis_tab, "技术分析")
         self._tab_widget.addTab(self._market_indicator_tab, "市场指标")
         self._tab_widget.addTab(self._score_radar_tab, "评分雷达图")
+        self._tab_widget.addTab(self._health_tab, "健康度诊断")
         self._tab_widget.addTab(self._pnl_analysis_tab, "持仓盈亏分析")
         self._tab_widget.addTab(self._settings_tab, "设置")
 
@@ -3604,8 +3607,16 @@ class MainWindow(QMainWindow):
         score_radar_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(8))
         view_menu.addAction(score_radar_action)
 
+        health_action = QAction("健康度诊断(&H)", self)
+        health_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(9))
+        view_menu.addAction(health_action)
+
+        pnl_action = QAction("持仓盈亏分析(&P)", self)
+        pnl_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(10))
+        view_menu.addAction(pnl_action)
+
         settings_action = QAction("设置(&S)", self)
-        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(9))
+        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(11))
         view_menu.addAction(settings_action)
 
         help_menu = menubar.addMenu("帮助(&H)")
@@ -3644,6 +3655,10 @@ class MainWindow(QMainWindow):
         elif index == 8:
             self._status_bar.showMessage("评分雷达图页面")
         elif index == 9:
+            self._status_bar.showMessage("健康度诊断页面")
+        elif index == 10:
+            self._status_bar.showMessage("持仓盈亏分析页面")
+        elif index == 11:
             self._status_bar.showMessage("设置页面")
 
     def _refresh_current_tab(self):
@@ -3665,6 +3680,12 @@ class MainWindow(QMainWindow):
         elif current_index == 7:
             self._market_indicator_tab.refresh()
         elif current_index == 8:
+            self._score_radar_tab.refresh()
+        elif current_index == 9:
+            self._health_tab.refresh()
+        elif current_index == 10:
+            self._pnl_analysis_tab.refresh()
+        elif current_index == 11:
             self._settings_tab.refresh()
 
         self._status_bar.showMessage(f"手动刷新于 {datetime.now().strftime('%H:%M:%S')}")
