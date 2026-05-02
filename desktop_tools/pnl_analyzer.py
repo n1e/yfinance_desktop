@@ -170,7 +170,7 @@ class BaseChartWidget(QWidget):
             self._draw_placeholder(painter, width, height)
             return
 
-        chart_rect = QRectF(60, 40, width - 70, height - 60)
+        chart_rect = QRectF(60, 45, width - 70, height - 100)
         self._draw_chart(painter, chart_rect)
 
     def _draw_background(self, painter: QPainter, width: int, height: int):
@@ -377,9 +377,9 @@ class BubbleChartWidget(BaseChartWidget):
             painter.drawEllipse(int(x - bubble_size/2), int(y - bubble_size/2), int(bubble_size), int(bubble_size))
             painter.setOpacity(1.0)
 
-            painter.setPen(QPen(Qt.white, 1))
-            painter.setFont(QFont('Microsoft YaHei', 8, QFont.Bold))
-            symbol_text = item.symbol[:4]
+            painter.setPen(QPen(self.COLOR_DARK_GRAY, 1))
+            painter.setFont(QFont('Microsoft YaHei', 9, QFont.Bold))
+            symbol_text = item.symbol
             painter.drawText(
                 int(x - bubble_size/2), int(y - bubble_size/2),
                 int(bubble_size), int(bubble_size),
@@ -643,23 +643,25 @@ class PriceComparisonChartWidget(BaseChartWidget):
         legend_y = 10
         painter.setFont(QFont('Microsoft YaHei', 9))
         
+        legend_x = int(rect.right() - 300)
+        
         painter.setPen(QPen(self.COLOR_ORANGE, 1))
         painter.setBrush(QBrush(self.COLOR_ORANGE))
-        painter.drawRect(int(rect.left()), legend_y, 15, 12)
+        painter.drawRect(legend_x, legend_y, 15, 12)
         painter.setPen(QPen(self.COLOR_GRAY, 1))
-        painter.drawText(int(rect.left() + 20), legend_y + 11, "成本价")
+        painter.drawText(legend_x + 20, legend_y + 11, "成本价")
 
         painter.setPen(QPen(self.COLOR_GREEN, 1))
         painter.setBrush(QBrush(self.COLOR_GREEN))
-        painter.drawRect(int(rect.left() + 80), legend_y, 15, 12)
+        painter.drawRect(legend_x + 80, legend_y, 15, 12)
         painter.setPen(QPen(self.COLOR_GRAY, 1))
-        painter.drawText(int(rect.left() + 100), legend_y + 11, "现价(盈利)")
+        painter.drawText(legend_x + 100, legend_y + 11, "现价(盈利)")
 
         painter.setPen(QPen(self.COLOR_RED, 1))
         painter.setBrush(QBrush(self.COLOR_RED))
-        painter.drawRect(int(rect.left() + 180), legend_y, 15, 12)
+        painter.drawRect(legend_x + 180, legend_y, 15, 12)
         painter.setPen(QPen(self.COLOR_GRAY, 1))
-        painter.drawText(int(rect.left() + 200), legend_y + 11, "现价(亏损)")
+        painter.drawText(legend_x + 200, legend_y + 11, "现价(亏损)")
 
 
 class PnLRankingTable(QWidget):
@@ -872,34 +874,41 @@ class PnLAnalysisTab(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setSpacing(15)
 
         self._stats_widget = PortfolioStatsWidget()
         layout.addWidget(self._stats_widget)
 
         main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
 
         left_splitter = QSplitter(Qt.Vertical)
+        left_splitter.setChildrenCollapsible(False)
 
         self._histogram_widget = PnLHistogramWidget()
+        self._histogram_widget.setMinimumHeight(300)
         left_splitter.addWidget(self._histogram_widget)
 
         self._bubble_widget = BubbleChartWidget()
         self._bubble_widget.bubble_clicked.connect(self._on_chart_item_clicked)
+        self._bubble_widget.setMinimumHeight(350)
         left_splitter.addWidget(self._bubble_widget)
 
-        left_splitter.setSizes([250, 350])
+        left_splitter.setSizes([300, 350])
 
         right_splitter = QSplitter(Qt.Vertical)
+        right_splitter.setChildrenCollapsible(False)
 
         self._waterfall_widget = WaterfallChartWidget()
         self._waterfall_widget.item_clicked.connect(self._on_chart_item_clicked)
+        self._waterfall_widget.setMinimumHeight(350)
         right_splitter.addWidget(self._waterfall_widget)
 
         self._price_chart_widget = PriceComparisonChartWidget()
+        self._price_chart_widget.setMinimumHeight(300)
         right_splitter.addWidget(self._price_chart_widget)
 
-        right_splitter.setSizes([350, 250])
+        right_splitter.setSizes([350, 300])
 
         main_splitter.addWidget(left_splitter)
         main_splitter.addWidget(right_splitter)
