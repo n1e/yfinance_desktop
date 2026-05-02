@@ -324,19 +324,32 @@ class ScoreRadarTab(QWidget):
 
         return symbols[:5]
 
+    def _is_thread_running(self) -> bool:
+        if self._analysis_thread is None:
+            return False
+        try:
+            return self._analysis_thread.isRunning()
+        except RuntimeError:
+            self._analysis_thread = None
+            return False
+
     def _cleanup_thread(self):
-        if self._analysis_thread is not None:
-            try:
-                if self._analysis_thread.isRunning():
-                    self._analysis_thread.cancel()
-                    self._analysis_thread.quit()
-                    if not self._analysis_thread.wait(3000):
-                        self._analysis_thread.terminate()
-                        self._analysis_thread.wait()
-            except Exception:
-                pass
-            finally:
-                self._analysis_thread = None
+        if self._analysis_thread is None:
+            return
+
+        try:
+            if self._analysis_thread.isRunning():
+                self._analysis_thread.cancel()
+                self._analysis_thread.quit()
+                if not self._analysis_thread.wait(3000):
+                    self._analysis_thread.terminate()
+                    self._analysis_thread.wait()
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
+        finally:
+            self._analysis_thread = None
 
     def _analyze_single_stock(self):
         symbol = self._get_selected_single_symbol()
@@ -344,7 +357,7 @@ class ScoreRadarTab(QWidget):
             QMessageBox.warning(self, "提示", "请选择或输入股票代码")
             return
 
-        if self._analysis_thread is not None and self._analysis_thread.isRunning():
+        if self._is_thread_running():
             QMessageBox.information(self, "提示", "分析正在进行中，请稍候...")
             return
 
@@ -361,7 +374,6 @@ class ScoreRadarTab(QWidget):
         thread.finished_signal.connect(self._on_single_analysis_finished)
         thread.error_signal.connect(self._on_analysis_error)
         thread.completed_signal.connect(self._on_thread_completed)
-        thread.finished.connect(thread.deleteLater)
 
         self._analysis_thread = thread
         thread.start()

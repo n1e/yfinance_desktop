@@ -211,19 +211,32 @@ class ScoreRankingWidget(QWidget):
 
         self._display_results(self._current_results)
 
+    def _is_worker_running(self) -> bool:
+        if self._ranking_worker is None:
+            return False
+        try:
+            return self._ranking_worker.isRunning()
+        except RuntimeError:
+            self._ranking_worker = None
+            return False
+
     def _cleanup_worker(self):
-        if self._ranking_worker is not None:
-            try:
-                if self._ranking_worker.isRunning():
-                    self._ranking_worker.cancel()
-                    self._ranking_worker.quit()
-                    if not self._ranking_worker.wait(3000):
-                        self._ranking_worker.terminate()
-                        self._ranking_worker.wait()
-            except Exception:
-                pass
-            finally:
-                self._ranking_worker = None
+        if self._ranking_worker is None:
+            return
+
+        try:
+            if self._ranking_worker.isRunning():
+                self._ranking_worker.cancel()
+                self._ranking_worker.quit()
+                if not self._ranking_worker.wait(3000):
+                    self._ranking_worker.terminate()
+                    self._ranking_worker.wait()
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
+        finally:
+            self._ranking_worker = None
 
     def _analyze_all_stocks(self):
         watchlist = self._watchlist_manager.watchlist
@@ -231,7 +244,7 @@ class ScoreRankingWidget(QWidget):
             QMessageBox.information(self, "提示", "自选股列表为空，请先添加股票")
             return
 
-        if self._ranking_worker is not None and self._ranking_worker.isRunning():
+        if self._is_worker_running():
             QMessageBox.information(self, "提示", "评分计算正在进行中，请稍候...")
             return
 
@@ -252,7 +265,6 @@ class ScoreRankingWidget(QWidget):
         worker.progress_signal.connect(self._on_progress)
         worker.finished_signal.connect(self._on_analysis_finished)
         worker.error_signal.connect(self._on_analysis_error)
-        worker.finished.connect(worker.deleteLater)
 
         self._ranking_worker = worker
         worker.start()
