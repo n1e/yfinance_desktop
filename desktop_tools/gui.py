@@ -31,6 +31,7 @@ from .volatility_analyzer import (
     PortfolioVolatilityResult
 )
 from .score_radar_tab import ScoreRadarTab
+from .pnl_analyzer import PnLAnalysisTab
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
@@ -3515,6 +3516,7 @@ class MainWindow(QMainWindow):
         self._technical_analysis_tab = TechnicalAnalysisTab()
         self._market_indicator_tab = MarketIndicatorTab()
         self._score_radar_tab = ScoreRadarTab()
+        self._pnl_analysis_tab = PnLAnalysisTab()
         self._settings_tab = SettingsTab()
 
         self._tab_widget.addTab(self._watchlist_tab, "自选股")
@@ -3526,6 +3528,7 @@ class MainWindow(QMainWindow):
         self._tab_widget.addTab(self._technical_analysis_tab, "技术分析")
         self._tab_widget.addTab(self._market_indicator_tab, "市场指标")
         self._tab_widget.addTab(self._score_radar_tab, "评分雷达图")
+        self._tab_widget.addTab(self._pnl_analysis_tab, "持仓盈亏分析")
         self._tab_widget.addTab(self._settings_tab, "设置")
 
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
