@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QUrl
 from PyQt5.QtGui import QFont, QColor, QDesktopServices, QIcon
 import sys
+import pandas as pd
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -23,6 +24,12 @@ from .market_indicators import MarketIndicators, IndicatorResult
 from .technical_analyzer import TechnicalAnalyzer
 from .technical_charts import PriceChartWidget, SignalDisplayWidget
 from .multi_factor_gui import MultiFactorScreenerTab
+from .volatility_analyzer import (
+    VolatilityAnalyzer, 
+    VolatilityMetrics, 
+    VolatilityAlertType, 
+    PortfolioVolatilityResult
+)
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
@@ -2806,6 +2813,677 @@ class TechnicalAnalysisThread(QThread):
             self.error_signal.emit(str(e))
 
 
+class VolatilityAnalysisThread(QThread):
+    finished_signal = pyqtSignal(dict)
+    error_signal = pyqtSignal(str)
+    progress_signal = pyqtSignal(int, int, str)
+
+    def __init__(self, analyzer: VolatilityAnalyzer, symbols: List[str], period: str, analysis_type: str = 'single'):
+        super().__init__()
+        self._analyzer = analyzer
+        self._symbols = symbols
+        self._period = period
+        self._analysis_type = analysis_type
+
+    def run(self):
+        try:
+            if self._analysis_type == 'portfolio':
+                result = self._analyzer.analyze_portfolio(self._symbols, self._period)
+                self.finished_signal.emit({
+                    'success': True,
+                    'analysis_type': 'portfolio',
+                    'result': result
+                })
+            else:
+                symbol = self._symbols[0] if self._symbols else ''
+                metrics = self._analyzer.analyze_stock(symbol, self._period)
+                chart_data = self._analyzer.get_volatility_chart_data(symbol, self._period)
+                
+                self.finished_signal.emit({
+                    'success': metrics is not None,
+                    'analysis_type': 'single',
+                    'symbol': symbol,
+                    'metrics': metrics,
+                    'chart_data': chart_data
+                })
+
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
+class VolatilityTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._watchlist_manager = WatchlistManager()
+        self._volatility_analyzer = VolatilityAnalyzer()
+        self._analysis_thread: Optional[VolatilityAnalysisThread] = None
+        self._current_metrics: Optional[VolatilityMetrics] = None
+        self._init_ui()
+        self._load_watchlist()
+        self._watchlist_manager.add_update_callback(self._load_watchlist)
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        control_group = QGroupBox("分析控制")
+        control_layout = QHBoxLayout(control_group)
+
+        self._analysis_mode_combo = QComboBox()
+        self._analysis_mode_combo.addItems(["单只股票分析", "投资组合分析"])
+        self._analysis_mode_combo.currentIndexChanged.connect(self._on_analysis_mode_changed)
+        control_layout.addWidget(QLabel("分析模式:"))
+        control_layout.addWidget(self._analysis_mode_combo)
+
+        control_layout.addSpacing(20)
+
+        self._stock_label = QLabel("选择股票:")
+        control_layout.addWidget(self._stock_label)
+        self._stock_combo = QComboBox()
+        self._stock_combo.setEditable(True)
+        self._stock_combo.setMinimumWidth(200)
+        control_layout.addWidget(self._stock_combo)
+
+        self._period_combo = QComboBox()
+        self._period_combo.addItems(["1个月", "3个月", "6个月", "1年", "2年"])
+        self._period_combo.setCurrentIndex(3)
+        control_layout.addWidget(QLabel("时间周期:"))
+        control_layout.addWidget(self._period_combo)
+
+        self._analyze_btn = QPushButton("开始分析")
+        self._analyze_btn.setMinimumHeight(35)
+        self._analyze_btn.clicked.connect(self._start_analysis)
+        control_layout.addWidget(self._analyze_btn)
+
+        self._analyze_all_btn = QPushButton("分析所有自选股")
+        self._analyze_all_btn.setMinimumHeight(35)
+        self._analyze_all_btn.clicked.connect(self._analyze_all_watchlist)
+        control_layout.addWidget(self._analyze_all_btn)
+
+        self._refresh_btn = QPushButton("刷新列表")
+        self._refresh_btn.setMinimumHeight(35)
+        self._refresh_btn.clicked.connect(self._load_watchlist)
+        control_layout.addWidget(self._refresh_btn)
+
+        control_layout.addStretch()
+        layout.addWidget(control_group)
+
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setVisible(False)
+        layout.addWidget(self._progress_bar)
+
+        self._status_label = QLabel("请选择股票并开始分析")
+        self._status_label.setStyleSheet("color: #666; font-size: 14px;")
+        layout.addWidget(self._status_label)
+
+        self._stacked_widget = QWidget()
+        stacked_layout = QVBoxLayout(self._stacked_widget)
+        stacked_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._single_stock_widget = self._create_single_stock_widget()
+        self._portfolio_widget = self._create_portfolio_widget()
+
+        stacked_layout.addWidget(self._single_stock_widget)
+        stacked_layout.addWidget(self._portfolio_widget)
+
+        self._portfolio_widget.hide()
+
+        layout.addWidget(self._stacked_widget, 1)
+
+    def _create_single_stock_widget(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        main_splitter = QSplitter(Qt.Vertical)
+
+        top_splitter = QSplitter(Qt.Horizontal)
+
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(5)
+
+        vol_metrics_group = QGroupBox("波动率指标")
+        vol_metrics_layout = QVBoxLayout(vol_metrics_group)
+
+        self._vol_table = QTableWidget()
+        self._vol_table.setColumnCount(2)
+        self._vol_table.setHorizontalHeaderLabels(["指标", "数值"])
+        self._vol_table.horizontalHeader().setStretchLastSection(True)
+        self._vol_table.setMinimumHeight(200)
+        vol_metrics_layout.addWidget(self._vol_table)
+
+        left_layout.addWidget(vol_metrics_group)
+
+        alert_group = QGroupBox("波动率预警")
+        alert_layout = QVBoxLayout(alert_group)
+
+        self._alert_status_label = QLabel("状态: 无预警")
+        self._alert_status_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #666;")
+        alert_layout.addWidget(self._alert_status_label)
+
+        self._alert_detail_label = QLabel("")
+        self._alert_detail_label.setStyleSheet("font-size: 12px; color: #666;")
+        alert_layout.addWidget(self._alert_detail_label)
+
+        self._alert_info_table = QTableWidget()
+        self._alert_info_table.setColumnCount(2)
+        self._alert_info_table.setHorizontalHeaderLabels(["项目", "数值"])
+        self._alert_info_table.horizontalHeader().setStretchLastSection(True)
+        self._alert_info_table.setMaximumHeight(150)
+        alert_layout.addWidget(self._alert_info_table)
+
+        left_layout.addWidget(alert_group)
+
+        corr_group = QGroupBox("波动率与收益相关性")
+        corr_layout = QVBoxLayout(corr_group)
+
+        self._corr_table = QTableWidget()
+        self._corr_table.setColumnCount(2)
+        self._corr_table.setHorizontalHeaderLabels(["项目", "数值"])
+        self._corr_table.horizontalHeader().setStretchLastSection(True)
+        self._corr_table.setMaximumHeight(120)
+        corr_layout.addWidget(self._corr_table)
+
+        left_layout.addWidget(corr_group)
+        left_layout.addStretch()
+
+        top_splitter.addWidget(left_widget)
+
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(5)
+
+        chart_group = QGroupBox("波动率走势图 (20日滚动年化波动率)")
+        chart_layout = QVBoxLayout(chart_group)
+
+        self._vol_chart_label = QLabel("波动率走势图")
+        self._vol_chart_label.setAlignment(Qt.AlignCenter)
+        self._vol_chart_label.setMinimumHeight(300)
+        self._vol_chart_label.setStyleSheet("border: 1px solid #ccc; background-color: #f9f9f9;")
+        chart_layout.addWidget(self._vol_chart_label)
+
+        right_layout.addWidget(chart_group)
+
+        trend_group = QGroupBox("波动率趋势分析")
+        trend_layout = QVBoxLayout(trend_group)
+
+        self._trend_table = QTableWidget()
+        self._trend_table.setColumnCount(2)
+        self._trend_table.setHorizontalHeaderLabels(["指标", "数值"])
+        self._trend_table.horizontalHeader().setStretchLastSection(True)
+        self._trend_table.setMaximumHeight(150)
+        trend_layout.addWidget(self._trend_table)
+
+        right_layout.addWidget(trend_group)
+        right_layout.addStretch()
+
+        top_splitter.addWidget(right_widget)
+        top_splitter.setSizes([400, 600])
+
+        main_splitter.addWidget(top_splitter)
+
+        layout.addWidget(main_splitter, 1)
+        return widget
+
+    def _create_portfolio_widget(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        summary_group = QGroupBox("投资组合波动率概览")
+        summary_layout = QHBoxLayout(summary_group)
+
+        self._portfolio_total_label = QLabel("股票总数: 0")
+        self._portfolio_total_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        summary_layout.addWidget(self._portfolio_total_label)
+
+        summary_layout.addSpacing(20)
+
+        self._portfolio_valid_label = QLabel("有效分析: 0")
+        summary_layout.addWidget(self._portfolio_valid_label)
+
+        summary_layout.addSpacing(20)
+
+        self._portfolio_avg_vol_label = QLabel("平均波动率: --")
+        summary_layout.addWidget(self._portfolio_avg_vol_label)
+
+        summary_layout.addSpacing(20)
+
+        self._portfolio_vol_spread_label = QLabel("波动率离散度: --")
+        summary_layout.addWidget(self._portfolio_vol_spread_label)
+
+        summary_layout.addSpacing(20)
+
+        self._portfolio_alert_label = QLabel("预警数量: 0")
+        self._portfolio_alert_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        summary_layout.addWidget(self._portfolio_alert_label)
+
+        summary_layout.addStretch()
+
+        layout.addWidget(summary_group)
+
+        extremes_group = QGroupBox("波动率极值")
+        extremes_layout = QHBoxLayout(extremes_group)
+
+        self._highest_vol_label = QLabel("最高波动率: -- (--)")
+        self._highest_vol_label.setStyleSheet("font-size: 13px; color: #ef4444;")
+        extremes_layout.addWidget(self._highest_vol_label)
+
+        extremes_layout.addSpacing(40)
+
+        self._lowest_vol_label = QLabel("最低波动率: -- (--)")
+        self._lowest_vol_label.setStyleSheet("font-size: 13px; color: #22c55e;")
+        extremes_layout.addWidget(self._lowest_vol_label)
+
+        extremes_layout.addStretch()
+
+        layout.addWidget(extremes_group)
+
+        self._portfolio_table = QTableWidget()
+        self._portfolio_table.setColumnCount(10)
+        self._portfolio_table.setHorizontalHeaderLabels([
+            "股票代码", "最新价格", "5日波动率", "20日波动率", "60日波动率",
+            "波动率趋势", "预警状态", "相关性", "波动率比率(20/60)", "波动率比率(5/20)"
+        ])
+        self._portfolio_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._portfolio_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._portfolio_table.setAlternatingRowColors(True)
+        self._portfolio_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._portfolio_table.setSortingEnabled(True)
+
+        layout.addWidget(self._portfolio_table, 1)
+
+        return widget
+
+    def _on_analysis_mode_changed(self, index: int):
+        if index == 0:
+            self._single_stock_widget.show()
+            self._portfolio_widget.hide()
+            self._stock_label.setText("选择股票:")
+            self._stock_combo.setEnabled(True)
+        else:
+            self._single_stock_widget.hide()
+            self._portfolio_widget.show()
+            self._stock_label.setText("股票列表:")
+            self._stock_combo.setEnabled(False)
+
+    def _load_watchlist(self):
+        self._stock_combo.clear()
+        symbols = self._watchlist_manager.watchlist
+        quotes = self._watchlist_manager.get_sorted_quotes()
+
+        for quote in quotes:
+            symbol = quote.get('symbol', '')
+            name = quote.get('name', '')
+            if symbol:
+                display_text = f"{symbol}"
+                if name:
+                    display_text += f" - {name}"
+                self._stock_combo.addItem(display_text, symbol)
+
+        for symbol in symbols:
+            exists = False
+            for i in range(self._stock_combo.count()):
+                if self._stock_combo.itemData(i) == symbol:
+                    exists = True
+                    break
+            if not exists:
+                self._stock_combo.addItem(symbol, symbol)
+
+        self._status_label.setText(f"已加载 {len(symbols)} 只自选股")
+
+    def _get_selected_symbol(self) -> str:
+        index = self._stock_combo.currentIndex()
+        if index >= 0:
+            symbol = self._stock_combo.itemData(index)
+            if symbol:
+                return symbol
+
+        text = self._stock_combo.currentText().strip()
+        if text:
+            if ' - ' in text:
+                return text.split(' - ')[0].strip()
+            return text
+        return ''
+
+    def _get_period_param(self) -> str:
+        index = self._period_combo.currentIndex()
+        period_map = {
+            0: '1mo',
+            1: '3mo',
+            2: '6mo',
+            3: '1y',
+            4: '2y'
+        }
+        return period_map.get(index, '1y')
+
+    def _start_analysis(self):
+        if self._analysis_thread and self._analysis_thread.isRunning():
+            QMessageBox.information(self, "提示", "分析正在进行中，请稍候...")
+            return
+
+        mode_index = self._analysis_mode_combo.currentIndex()
+
+        if mode_index == 0:
+            symbol = self._get_selected_symbol()
+            if not symbol:
+                QMessageBox.warning(self, "提示", "请选择或输入股票代码")
+                return
+            symbols = [symbol]
+            analysis_type = 'single'
+        else:
+            symbols = self._watchlist_manager.watchlist
+            if not symbols:
+                QMessageBox.warning(self, "提示", "自选股列表为空")
+                return
+            analysis_type = 'portfolio'
+
+        self._analyze_btn.setEnabled(False)
+        self._analyze_all_btn.setEnabled(False)
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setRange(0, 0)
+        self._status_label.setText(f"正在分析波动率...")
+
+        self._analysis_thread = VolatilityAnalysisThread(
+            self._volatility_analyzer,
+            symbols,
+            self._get_period_param(),
+            analysis_type
+        )
+        self._analysis_thread.finished_signal.connect(self._on_analysis_finished)
+        self._analysis_thread.error_signal.connect(self._on_analysis_error)
+        self._analysis_thread.start()
+
+    def _analyze_all_watchlist(self):
+        symbols = self._watchlist_manager.watchlist
+        if not symbols:
+            QMessageBox.warning(self, "提示", "自选股列表为空")
+            return
+
+        if self._analysis_thread and self._analysis_thread.isRunning():
+            QMessageBox.information(self, "提示", "分析正在进行中，请稍候...")
+            return
+
+        self._analyze_btn.setEnabled(False)
+        self._analyze_all_btn.setEnabled(False)
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setRange(0, 0)
+        self._status_label.setText(f"正在分析 {len(symbols)} 只股票的波动率...")
+
+        self._analysis_thread = VolatilityAnalysisThread(
+            self._volatility_analyzer,
+            symbols,
+            self._get_period_param(),
+            'portfolio'
+        )
+        self._analysis_thread.finished_signal.connect(self._on_analysis_finished)
+        self._analysis_thread.error_signal.connect(self._on_analysis_error)
+        self._analysis_thread.start()
+
+    def _on_analysis_finished(self, result: Dict[str, Any]):
+        self._analyze_btn.setEnabled(True)
+        self._analyze_all_btn.setEnabled(True)
+        self._progress_bar.setVisible(False)
+
+        analysis_type = result.get('analysis_type', 'single')
+
+        if analysis_type == 'single':
+            if result.get('success'):
+                self._current_metrics = result.get('metrics')
+                self._display_single_stock_result(result)
+                self._status_label.setText(f"分析完成: {result.get('symbol', '')}")
+            else:
+                self._status_label.setText("分析失败，无法获取波动率数据")
+                QMessageBox.warning(self, "提示", "无法获取波动率数据，请检查股票代码是否正确")
+        else:
+            portfolio_result = result.get('result')
+            if portfolio_result:
+                self._display_portfolio_result(portfolio_result)
+                self._status_label.setText(f"投资组合分析完成: 有效 {portfolio_result.valid_symbols}/{portfolio_result.total_symbols} 只股票")
+            else:
+                self._status_label.setText("投资组合分析失败")
+
+    def _on_analysis_error(self, error_msg: str):
+        self._analyze_btn.setEnabled(True)
+        self._analyze_all_btn.setEnabled(True)
+        self._progress_bar.setVisible(False)
+        self._status_label.setText(f"分析出错: {error_msg}")
+        QMessageBox.critical(self, "错误", f"分析过程中出错:\n{error_msg}")
+
+    def _display_single_stock_result(self, result: Dict[str, Any]):
+        metrics = result.get('metrics')
+        chart_data = result.get('chart_data')
+
+        if not metrics:
+            return
+
+        self._display_vol_metrics(metrics)
+        self._display_alert_info(metrics)
+        self._display_correlation(metrics)
+        self._display_trend_info(metrics)
+
+        if chart_data:
+            self._display_vol_chart(chart_data)
+
+    def _display_vol_metrics(self, metrics: VolatilityMetrics):
+        self._vol_table.setSortingEnabled(False)
+        self._vol_table.setRowCount(0)
+
+        vol_items = [
+            ("最新价格", f"${metrics.latest_price:.2f}" if metrics.latest_price else "--"),
+            ("5日波动率 (年化)", f"{metrics.vol_5d_annualized*100:.2f}%" if metrics.vol_5d_annualized else "--"),
+            ("10日波动率 (年化)", f"{metrics.vol_10d_annualized*100:.2f}%" if metrics.vol_10d_annualized else "--"),
+            ("20日波动率 (年化)", f"{metrics.vol_20d_annualized*100:.2f}%" if metrics.vol_20d_annualized else "--"),
+            ("60日波动率 (年化)", f"{metrics.vol_60d_annualized*100:.2f}%" if metrics.vol_60d_annualized else "--"),
+            ("5日波动率 (日频)", f"{metrics.vol_5d*100:.4f}%" if metrics.vol_5d else "--"),
+            ("20日波动率 (日频)", f"{metrics.vol_20d*100:.4f}%" if metrics.vol_20d else "--"),
+        ]
+
+        self._vol_table.setRowCount(len(vol_items))
+        for i, (label, value) in enumerate(vol_items):
+            self._vol_table.setItem(i, 0, QTableWidgetItem(label))
+            self._vol_table.setItem(i, 1, QTableWidgetItem(value))
+
+        self._vol_table.setSortingEnabled(True)
+
+    def _display_alert_info(self, metrics: VolatilityMetrics):
+        if metrics.alert_type == VolatilityAlertType.BREAKOUT_HIGH:
+            self._alert_status_label.setText("状态: ⚠️ 波动率突破上轨")
+            self._alert_status_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ef4444;")
+        elif metrics.alert_type == VolatilityAlertType.BREAKOUT_LOW:
+            self._alert_status_label.setText("状态: 📉 波动率突破下轨")
+            self._alert_status_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #f59e0b;")
+        else:
+            self._alert_status_label.setText("状态: ✓ 波动率在正常区间")
+            self._alert_status_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #22c55e;")
+
+        self._alert_detail_label.setText(f"预警类型: {metrics.alert_type.value}")
+
+        self._alert_info_table.setSortingEnabled(False)
+        self._alert_info_table.setRowCount(0)
+
+        alert_items = [
+            ("当前波动率", f"{metrics.current_vol*100:.2f}%" if metrics.current_vol else "--"),
+            ("历史均值", f"{metrics.historical_vol_mean*100:.2f}%" if metrics.historical_vol_mean else "--"),
+            ("历史标准差", f"{metrics.historical_vol_std*100:.4f}%" if metrics.historical_vol_std else "--"),
+            ("上轨 (均值+2σ)", f"{metrics.upper_band*100:.2f}%" if metrics.upper_band else "--"),
+            ("下轨 (均值-2σ)", f"{metrics.lower_band*100:.2f}%" if metrics.lower_band else "--"),
+        ]
+
+        self._alert_info_table.setRowCount(len(alert_items))
+        for i, (label, value) in enumerate(alert_items):
+            self._alert_info_table.setItem(i, 0, QTableWidgetItem(label))
+            self._alert_info_table.setItem(i, 1, QTableWidgetItem(value))
+
+        self._alert_info_table.setSortingEnabled(True)
+
+    def _display_correlation(self, metrics: VolatilityMetrics):
+        self._corr_table.setSortingEnabled(False)
+        self._corr_table.setRowCount(0)
+
+        corr_value = metrics.volatility_return_correlation
+        corr_text = f"{corr_value:.4f}" if not pd.isna(corr_value) else "--"
+
+        corr_items = [
+            ("相关性系数", corr_text),
+            ("显著性", metrics.correlation_significance or "--"),
+        ]
+
+        self._corr_table.setRowCount(len(corr_items))
+        for i, (label, value) in enumerate(corr_items):
+            self._corr_table.setItem(i, 0, QTableWidgetItem(label))
+            corr_item = QTableWidgetItem(value)
+            if not pd.isna(corr_value):
+                if abs(corr_value) > 0.5:
+                    corr_item.setForeground(QColor(239, 68, 68) if corr_value < 0 else QColor(34, 197, 94))
+                elif abs(corr_value) > 0.3:
+                    corr_item.setForeground(QColor(251, 191, 36))
+            self._corr_table.setItem(i, 1, corr_item)
+
+        self._corr_table.setSortingEnabled(True)
+
+    def _display_trend_info(self, metrics: VolatilityMetrics):
+        self._trend_table.setSortingEnabled(False)
+        self._trend_table.setRowCount(0)
+
+        trend_items = [
+            ("波动率趋势", metrics.vol_trend or "--"),
+            ("波动率比率 (20日/60日)", f"{metrics.vol_ratio_20_60:.3f}" if metrics.vol_ratio_20_60 else "--"),
+            ("波动率比率 (5日/20日)", f"{metrics.vol_ratio_5_20:.3f}" if metrics.vol_ratio_5_20 else "--"),
+        ]
+
+        self._trend_table.setRowCount(len(trend_items))
+        for i, (label, value) in enumerate(trend_items):
+            self._trend_table.setItem(i, 0, QTableWidgetItem(label))
+            trend_item = QTableWidgetItem(str(value))
+
+            if "比率" in label:
+                try:
+                    ratio = float(value)
+                    if ratio > 1.2:
+                        trend_item.setForeground(QColor(239, 68, 68))
+                    elif ratio < 0.8:
+                        trend_item.setForeground(QColor(34, 197, 94))
+                except:
+                    pass
+
+            self._trend_table.setItem(i, 1, trend_item)
+
+        self._trend_table.setSortingEnabled(True)
+
+    def _display_vol_chart(self, chart_data: Dict[str, Any]):
+        self._vol_chart_label.setText("波动率走势图\n\n(注: 请使用 matplotlib 或其他图表库绘制完整图表)")
+
+    def _display_portfolio_result(self, result: PortfolioVolatilityResult):
+        self._portfolio_total_label.setText(f"股票总数: {result.total_symbols}")
+        self._portfolio_valid_label.setText(f"有效分析: {result.valid_symbols}")
+        self._portfolio_avg_vol_label.setText(
+            f"平均波动率: {result.avg_volatility*100:.2f}%" if result.avg_volatility else "平均波动率: --"
+        )
+        self._portfolio_vol_spread_label.setText(
+            f"波动率离散度: {result.portfolio_volatility*100:.2f}%" if result.portfolio_volatility else "波动率离散度: --"
+        )
+
+        alert_text = f"预警数量: {result.alert_count}"
+        if result.high_vol_count > 0:
+            alert_text += f" (高波动预警: {result.high_vol_count})"
+        if result.low_vol_count > 0:
+            alert_text += f" (低波动预警: {result.low_vol_count})"
+        self._portfolio_alert_label.setText(alert_text)
+
+        if result.highest_vol_symbol and result.highest_volatility:
+            self._highest_vol_label.setText(
+                f"最高波动率: {result.highest_vol_symbol} ({result.highest_volatility*100:.2f}%)"
+            )
+        if result.lowest_vol_symbol and result.lowest_volatility:
+            self._lowest_vol_label.setText(
+                f"最低波动率: {result.lowest_vol_symbol} ({result.lowest_volatility*100:.2f}%)"
+            )
+
+        self._display_portfolio_table(result)
+
+    def _display_portfolio_table(self, result: PortfolioVolatilityResult):
+        self._portfolio_table.setSortingEnabled(False)
+        self._portfolio_table.setRowCount(0)
+
+        if not result.individual_metrics:
+            self._portfolio_table.setSortingEnabled(True)
+            return
+
+        metrics_list = result.individual_metrics
+        self._portfolio_table.setRowCount(len(metrics_list))
+
+        green = QColor(34, 197, 94)
+        red = QColor(239, 68, 68)
+        yellow = QColor(251, 191, 36)
+        black = QColor(0, 0, 0)
+
+        for row, metrics in enumerate(metrics_list):
+            self._portfolio_table.setItem(row, 0, QTableWidgetItem(metrics.symbol))
+
+            price_text = f"${metrics.latest_price:.2f}" if metrics.latest_price else "--"
+            self._portfolio_table.setItem(row, 1, NumericTableWidgetItem(price_text, metrics.latest_price or 0))
+
+            vol_5d_text = f"{metrics.vol_5d_annualized*100:.2f}%" if metrics.vol_5d_annualized else "--"
+            vol_5d_item = NumericTableWidgetItem(vol_5d_text, metrics.vol_5d_annualized or 0)
+            self._portfolio_table.setItem(row, 2, vol_5d_item)
+
+            vol_20d_text = f"{metrics.vol_20d_annualized*100:.2f}%" if metrics.vol_20d_annualized else "--"
+            vol_20d_item = NumericTableWidgetItem(vol_20d_text, metrics.vol_20d_annualized or 0)
+            self._portfolio_table.setItem(row, 3, vol_20d_item)
+
+            vol_60d_text = f"{metrics.vol_60d_annualized*100:.2f}%" if metrics.vol_60d_annualized else "--"
+            vol_60d_item = NumericTableWidgetItem(vol_60d_text, metrics.vol_60d_annualized or 0)
+            self._portfolio_table.setItem(row, 4, vol_60d_item)
+
+            trend_text = metrics.vol_trend or "--"
+            trend_item = QTableWidgetItem(trend_text)
+            if "上升" in trend_text:
+                trend_item.setForeground(red)
+            elif "下降" in trend_text:
+                trend_item.setForeground(green)
+            self._portfolio_table.setItem(row, 5, trend_item)
+
+            alert_text = metrics.alert_type.value
+            alert_item = QTableWidgetItem(alert_text)
+            if metrics.alert_type == VolatilityAlertType.BREAKOUT_HIGH:
+                alert_item.setForeground(red)
+            elif metrics.alert_type == VolatilityAlertType.BREAKOUT_LOW:
+                alert_item.setForeground(yellow)
+            self._portfolio_table.setItem(row, 6, alert_item)
+
+            corr_text = f"{metrics.volatility_return_correlation:.3f}" if not pd.isna(metrics.volatility_return_correlation) else "--"
+            corr_item = QTableWidgetItem(corr_text)
+            self._portfolio_table.setItem(row, 7, corr_item)
+
+            ratio_20_60_text = f"{metrics.vol_ratio_20_60:.3f}" if metrics.vol_ratio_20_60 else "--"
+            ratio_20_60_item = NumericTableWidgetItem(ratio_20_60_text, metrics.vol_ratio_20_60 or 0)
+            if metrics.vol_ratio_20_60 and metrics.vol_ratio_20_60 > 1.2:
+                ratio_20_60_item.setForeground(red)
+            elif metrics.vol_ratio_20_60 and metrics.vol_ratio_20_60 < 0.8:
+                ratio_20_60_item.setForeground(green)
+            self._portfolio_table.setItem(row, 8, ratio_20_60_item)
+
+            ratio_5_20_text = f"{metrics.vol_ratio_5_20:.3f}" if metrics.vol_ratio_5_20 else "--"
+            ratio_5_20_item = NumericTableWidgetItem(ratio_5_20_text, metrics.vol_ratio_5_20 or 0)
+            if metrics.vol_ratio_5_20 and metrics.vol_ratio_5_20 > 1.2:
+                ratio_5_20_item.setForeground(red)
+            elif metrics.vol_ratio_5_20 and metrics.vol_ratio_5_20 < 0.8:
+                ratio_5_20_item.setForeground(green)
+            self._portfolio_table.setItem(row, 9, ratio_5_20_item)
+
+        self._portfolio_table.setSortingEnabled(True)
+
+    def refresh(self):
+        self._load_watchlist()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -2832,6 +3510,7 @@ class MainWindow(QMainWindow):
         self._screener_tab = ScreenerTab()
         self._multi_factor_tab = MultiFactorScreenerTab()
         self._valuation_tab = ValuationTab()
+        self._volatility_tab = VolatilityTab()
         self._technical_analysis_tab = TechnicalAnalysisTab()
         self._market_indicator_tab = MarketIndicatorTab()
         self._settings_tab = SettingsTab()
@@ -2841,6 +3520,7 @@ class MainWindow(QMainWindow):
         self._tab_widget.addTab(self._screener_tab, "选股工具")
         self._tab_widget.addTab(self._multi_factor_tab, "多因子选股")
         self._tab_widget.addTab(self._valuation_tab, "估值分析")
+        self._tab_widget.addTab(self._volatility_tab, "波动率分析")
         self._tab_widget.addTab(self._technical_analysis_tab, "技术分析")
         self._tab_widget.addTab(self._market_indicator_tab, "市场指标")
         self._tab_widget.addTab(self._settings_tab, "设置")
@@ -2902,16 +3582,20 @@ class MainWindow(QMainWindow):
         valuation_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(4))
         view_menu.addAction(valuation_action)
 
+        volatility_action = QAction("波动率分析(&L)", self)
+        volatility_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(5))
+        view_menu.addAction(volatility_action)
+
         technical_analysis_action = QAction("技术分析(&T)", self)
-        technical_analysis_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(5))
+        technical_analysis_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(6))
         view_menu.addAction(technical_analysis_action)
 
         market_indicator_action = QAction("市场指标(&M)", self)
-        market_indicator_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(6))
+        market_indicator_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(7))
         view_menu.addAction(market_indicator_action)
 
         settings_action = QAction("设置(&S)", self)
-        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(7))
+        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(8))
         view_menu.addAction(settings_action)
 
         help_menu = menubar.addMenu("帮助(&H)")
@@ -2942,10 +3626,12 @@ class MainWindow(QMainWindow):
         elif index == 4:
             self._status_bar.showMessage("估值分析页面")
         elif index == 5:
-            self._status_bar.showMessage("技术分析页面")
+            self._status_bar.showMessage("波动率分析页面")
         elif index == 6:
-            self._status_bar.showMessage("市场指标页面")
+            self._status_bar.showMessage("技术分析页面")
         elif index == 7:
+            self._status_bar.showMessage("市场指标页面")
+        elif index == 8:
             self._status_bar.showMessage("设置页面")
 
     def _refresh_current_tab(self):
@@ -2961,10 +3647,12 @@ class MainWindow(QMainWindow):
         elif current_index == 4:
             self._valuation_tab.refresh()
         elif current_index == 5:
-            self._technical_analysis_tab.refresh()
+            self._volatility_tab.refresh()
         elif current_index == 6:
-            self._market_indicator_tab.refresh()
+            self._technical_analysis_tab.refresh()
         elif current_index == 7:
+            self._market_indicator_tab.refresh()
+        elif current_index == 8:
             self._settings_tab.refresh()
 
         self._status_bar.showMessage(f"手动刷新于 {datetime.now().strftime('%H:%M:%S')}")
@@ -2988,6 +3676,7 @@ class MainWindow(QMainWindow):
             "- 新闻资讯获取\n"
             "- 智能选股工具\n"
             "- 估值分析功能\n"
+            "- 波动率分析功能\n"
             "- 技术分析功能"
         )
 
