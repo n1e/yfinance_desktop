@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import json
 import os
+from pathlib import Path
 
 from .technical_analyzer import TechnicalAnalyzer
 from .valuation_analyzer import ValuationAnalyzer, ValuationMetrics
@@ -99,8 +100,9 @@ class PortfolioHealthAnalyzer:
         self._load_history()
     
     def _get_history_file_path(self) -> str:
-        config_dir = self._config._get_config_dir()
-        return os.path.join(config_dir, "health_history.json")
+        config_dir = Path.home() / ".stock_monitor"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return str(config_dir / "health_history.json")
     
     def _load_history(self):
         if not os.path.exists(self._history_file):
