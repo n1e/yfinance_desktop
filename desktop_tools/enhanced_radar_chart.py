@@ -538,7 +538,12 @@ class ScoreDetailPanel(QWidget):
 
     def _update_display(self):
         for i in reversed(range(self._content_layout.count())):
-            self._content_layout.itemAt(i).widget().setParent(None)
+            item = self._content_layout.itemAt(i)
+            if item is not None:
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
 
         if not self._result:
             no_data_label = QLabel("暂无评分数据")
