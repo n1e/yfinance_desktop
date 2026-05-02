@@ -676,7 +676,7 @@ class PriceComparisonChartWidget(BaseChartWidget):
                 painter.setPen(QPen(Qt.white, 1))
                 painter.drawText(int(current_x), int(current_y + 3), int(bar_width), 12, Qt.AlignCenter, current_text)
 
-        legend_y = 8
+        legend_y = int(rect.top()) + 5
         painter.setFont(QFont('Microsoft YaHei', 9))
         
         legend_x = int(rect.left())
