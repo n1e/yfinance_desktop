@@ -432,13 +432,13 @@ class HistoryTrendChart(QWidget):
 
         painter.setPen(QPen(QColor(226, 232, 240), 1, Qt.DashLine))
         for i in range(5):
-            y = padding_top + chart_height * i / 4
+            y = int(padding_top + chart_height * i / 4)
             painter.drawLine(padding_left, y, width - padding_right, y)
 
         painter.setFont(QFont('Microsoft YaHei', 9))
         painter.setPen(QPen(QColor(100, 116, 139), 1))
         for i in range(5):
-            y = padding_top + chart_height * i / 4
+            y = int(padding_top + chart_height * i / 4)
             score = 100 - i * 25
             painter.drawText(5, y - 8, 50, 16, Qt.AlignRight | Qt.AlignVCenter, f"{score}分")
 
@@ -450,9 +450,9 @@ class HistoryTrendChart(QWidget):
             for i, record in enumerate(self._history):
                 x = padding_left + chart_width * i / (len(self._history) - 1)
                 y = padding_top + chart_height * (1 - record.total_score / 100)
-                points.append((x, y))
+                points.append((float(x), float(y)))
 
-            fill_path.moveTo(padding_left, padding_top + chart_height)
+            fill_path.moveTo(float(padding_left), float(padding_top + chart_height))
             for i, (x, y) in enumerate(points):
                 if i == 0:
                     path.moveTo(x, y)
@@ -461,10 +461,11 @@ class HistoryTrendChart(QWidget):
                     path.lineTo(x, y)
                     fill_path.lineTo(x, y)
             
-            fill_path.lineTo(points[-1][0] if points else padding_left, padding_top + chart_height)
+            fill_path.lineTo(float(points[-1][0]) if points else float(padding_left), 
+                           float(padding_top + chart_height))
             fill_path.closeSubpath()
 
-            gradient = QLinearGradient(0, padding_top, 0, padding_top + chart_height)
+            gradient = QLinearGradient(0, float(padding_top), 0, float(padding_top + chart_height))
             gradient.setColorAt(0, QColor(59, 130, 246, 40))
             gradient.setColorAt(1, QColor(59, 130, 246, 10))
             painter.setBrush(QBrush(gradient))
@@ -487,7 +488,7 @@ class HistoryTrendChart(QWidget):
             step = max(1, len(self._history) // 5)
             for i in range(0, len(self._history), step):
                 record = self._history[i]
-                x = padding_left + chart_width * i / (len(self._history) - 1 if len(self._history) > 1 else 1)
+                x = int(padding_left + chart_width * i / (len(self._history) - 1 if len(self._history) > 1 else 1))
                 date_str = record.date.strftime("%m-%d")
                 painter.drawText(int(x) - 25, height - 25, 50, 20, Qt.AlignCenter, date_str)
 
