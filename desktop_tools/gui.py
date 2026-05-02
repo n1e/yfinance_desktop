@@ -30,6 +30,7 @@ from .volatility_analyzer import (
     VolatilityAlertType, 
     PortfolioVolatilityResult
 )
+from .score_radar_tab import ScoreRadarTab
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
@@ -3513,6 +3514,7 @@ class MainWindow(QMainWindow):
         self._volatility_tab = VolatilityTab()
         self._technical_analysis_tab = TechnicalAnalysisTab()
         self._market_indicator_tab = MarketIndicatorTab()
+        self._score_radar_tab = ScoreRadarTab()
         self._settings_tab = SettingsTab()
 
         self._tab_widget.addTab(self._watchlist_tab, "自选股")
@@ -3523,6 +3525,7 @@ class MainWindow(QMainWindow):
         self._tab_widget.addTab(self._volatility_tab, "波动率分析")
         self._tab_widget.addTab(self._technical_analysis_tab, "技术分析")
         self._tab_widget.addTab(self._market_indicator_tab, "市场指标")
+        self._tab_widget.addTab(self._score_radar_tab, "评分雷达图")
         self._tab_widget.addTab(self._settings_tab, "设置")
 
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -3594,8 +3597,12 @@ class MainWindow(QMainWindow):
         market_indicator_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(7))
         view_menu.addAction(market_indicator_action)
 
+        score_radar_action = QAction("评分雷达图(&R)", self)
+        score_radar_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(8))
+        view_menu.addAction(score_radar_action)
+
         settings_action = QAction("设置(&S)", self)
-        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(8))
+        settings_action.triggered.connect(lambda: self._tab_widget.setCurrentIndex(9))
         view_menu.addAction(settings_action)
 
         help_menu = menubar.addMenu("帮助(&H)")
@@ -3632,6 +3639,8 @@ class MainWindow(QMainWindow):
         elif index == 7:
             self._status_bar.showMessage("市场指标页面")
         elif index == 8:
+            self._status_bar.showMessage("评分雷达图页面")
+        elif index == 9:
             self._status_bar.showMessage("设置页面")
 
     def _refresh_current_tab(self):
